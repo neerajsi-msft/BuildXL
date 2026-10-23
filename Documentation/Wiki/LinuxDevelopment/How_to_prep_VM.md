@@ -25,6 +25,17 @@ rm packages-microsoft-prod.deb
 sudo apt-get install -y dotnet-sdk-6.0 
 ```
 
+## Linux-only selfhost build
+
+To build and deploy only the Linux developer engine, without restoring or
+evaluating macOS native packages:
+
+```bash
+./bxl.sh --deploy-dev /p:[Sdk.BuildXL]linuxOnly=1 /server-
+./bxl.sh --use-dev /p:[Sdk.BuildXL]linuxOnly=1 /server-
+```
+
+The flag is opt-in; default cross-platform package behavior is unchanged.
 ## Install/configure git credentials provider
 
 * follow https://github.com/GitCredentialManager/git-credential-manager#linux
