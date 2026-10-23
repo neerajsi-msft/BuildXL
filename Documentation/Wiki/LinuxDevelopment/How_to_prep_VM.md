@@ -25,6 +25,14 @@ rm packages-microsoft-prod.deb
 sudo apt-get install -y dotnet-sdk-6.0 
 ```
 
+## Resource sampling without I/O accounting
+
+Kernels without `/proc/<pid>/io` can still provide CPU and memory measurements.
+BuildXL preserves those measurements and reports zero I/O counters, with a
+one-time trace diagnostic that I/O accounting is unavailable.
+Availability is detected once using `/proc/self/io`; when it is absent, subsequent
+samples skip I/O reads entirely while continuing to read CPU and memory data.
+
 ## Install/configure git credentials provider
 
 * follow https://github.com/GitCredentialManager/git-credential-manager#linux
