@@ -25,6 +25,14 @@ rm packages-microsoft-prod.deb
 sudo apt-get install -y dotnet-sdk-6.0 
 ```
 
+## WSL DNS configuration
+
+When bootstrapping on WSL with an older engine, append
+`/unsafe_GlobalUntrackedScopes:/mnt/wsl/resolv.conf` to the selfhost command if DNS resolution reports
+that file as an undeclared dependency. The rebuilt engine includes this exact
+WSL DNS configuration file in its Linux OS dependencies, so the override is
+not needed afterward.
+
 ## Install/configure git credentials provider
 
 * follow https://github.com/GitCredentialManager/git-credential-manager#linux
