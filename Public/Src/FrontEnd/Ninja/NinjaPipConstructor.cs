@@ -36,8 +36,14 @@ namespace BuildXL.FrontEnd.Ninja
         private readonly AbsolutePath m_specPath;
 
         private readonly PipConstructionHelper m_pipConstructionHelper;
-        private readonly ConcurrentDictionary<NinjaNode, ProcessOutputs> m_processOutputs = new ConcurrentDictionary<NinjaNode, ProcessOutputs>();
-        private readonly ConcurrentDictionary<AbsolutePath, FileArtifact> m_outputFileArtifacts = new ConcurrentDictionary<AbsolutePath, FileArtifact>();
+        internal sealed class SharedState
+        {
+            public readonly ConcurrentDictionary<NinjaNode, ProcessOutputs> ProcessOutputs = new();
+            public readonly ConcurrentDictionary<AbsolutePath, FileArtifact> OutputFileArtifacts = new();
+        }
+
+        private readonly ConcurrentDictionary<NinjaNode, ProcessOutputs> m_processOutputs;
+        private readonly ConcurrentDictionary<AbsolutePath, FileArtifact> m_outputFileArtifacts;
         private readonly ConcurrentDictionary<string, AbsolutePath> m_exeLocations = new ConcurrentDictionary<string, AbsolutePath>();
         private readonly NinjaPipConstructionSettings m_settings;
         private readonly IEnumerable<KeyValuePair<string, string>> m_userDefinedEnvironment;
@@ -50,7 +56,9 @@ namespace BuildXL.FrontEnd.Ninja
             QualifierId qualifierId, 
             AbsolutePath projectRoot, 
             AbsolutePath specPath,
-            NinjaPipConstructionSettings settings)
+            NinjaPipConstructionSettings settings,
+            SharedState sharedState = null,
+            string projectName = null)
         {
             Contract.Requires(context != null);
             Contract.Requires(frontEndHost != null);
@@ -64,7 +72,10 @@ namespace BuildXL.FrontEnd.Ninja
             m_projectRoot = projectRoot;
             m_specPath = specPath;
             m_settings = settings;
-            m_pipConstructionHelper = GetPipConstructionHelperForModule(m_projectRoot, moduleDefinition, qualifierId);
+            sharedState ??= new SharedState();
+            m_processOutputs = sharedState.ProcessOutputs;
+            m_outputFileArtifacts = sharedState.OutputFileArtifacts;
+            m_pipConstructionHelper = GetPipConstructionHelperForModule(m_projectRoot, moduleDefinition, qualifierId, projectName);
             m_frontEndName = frontEndName;
             PrepareEnvironment(settings.UserDefinedEnvironment, settings.UserDefinedPassthroughVariables, out m_userDefinedEnvironment, out m_userDefinedPassthroughVariables);
         }
@@ -98,7 +109,7 @@ namespace BuildXL.FrontEnd.Ninja
             return true;
         }
 
-        private PipConstructionHelper GetPipConstructionHelperForModule(AbsolutePath projectRoot, ModuleDefinition moduleDefinition, QualifierId qualifierId)
+        private PipConstructionHelper GetPipConstructionHelperForModule(AbsolutePath projectRoot, ModuleDefinition moduleDefinition, QualifierId qualifierId, string projectName)
         {
             // One and only one AbsolutePath in the specs (corresponding to the build.ninja
             // If this changed, this method would be out of here, as we would need a different PipConstructionHelper
@@ -106,8 +117,20 @@ namespace BuildXL.FrontEnd.Ninja
             Contract.Requires(moduleDefinition.Specs.Count == 1);
 
             // Get a symbol that is unique for this particular instance
-            var fullSymbol = FullSymbol.Create(m_context.SymbolTable, $"ninja.{PipConstructionUtilities.SanitizeStringForSymbol(moduleDefinition.Descriptor.Name)}"); // TODO: Figure this out, complete
+            var symbolName = $"ninja.{PipConstructionUtilities.SanitizeStringForSymbol(moduleDefinition.Descriptor.Name)}";
+            if (projectName != null)
+            {
+                // A separate symbol gives each project's construction helper a distinct pip identity.
+                symbolName += "." + PipConstructionUtilities.SanitizeStringForSymbol(projectName) + "_" +
+                    PipConstructionUtilities.ComputeSha256(projectName);
+            }
+            var fullSymbol = FullSymbol.Create(m_context.SymbolTable, symbolName);
             AbsolutePath pathToSpec = moduleDefinition.Specs.First();
+            if (projectName != null)
+            {
+                // The group owns one synthetic spec; individual Ninja files are tracked during graph extraction.
+                projectRoot = moduleDefinition.Root;
+            }
             if (!projectRoot.TryGetRelative(m_context.PathTable, pathToSpec, out var specRelativePath))
             {
                 // Issue a warning and continue with Invalid path. PipConstructionHelper will just ignore
@@ -183,26 +206,21 @@ namespace BuildXL.FrontEnd.Ninja
         private void AddInputs(NinjaNode node, ProcessBuilder processBuilder)
         {
 
-            foreach (AbsolutePath input in node.Inputs.Where(i => !m_outputFileArtifacts.ContainsKey(i))) // We only want source files. If the file is in m_outputFileArtifacts then it was output by someone else
-            {                                                                                       // and we have that dependency expressed in node.
-                processBuilder.AddInputFile(FileArtifact.CreateSourceFile(input));
+            foreach (AbsolutePath input in node.Inputs)
+            {
+                processBuilder.AddInputFile(m_outputFileArtifacts.TryGetValue(input, out var produced)
+                    ? produced
+                    : FileArtifact.CreateSourceFile(input));
             }
 
             foreach (NinjaNode dependency in node.Dependencies)
             {
 
-                bool outputsPresent = m_processOutputs.TryGetValue(dependency, out ProcessOutputs processOutputs);
+                bool outputsPresent = m_processOutputs.ContainsKey(dependency);
 
                 string ListOutputs(NinjaNode n) => string.Join(" ", n.Outputs.Select(x => x.GetName(m_context.PathTable).ToString(m_context.StringTable)).ToList());
                 Contract.Assert(outputsPresent, $"Pips must have been presented in dependency order: [build { ListOutputs(dependency) }] missing, dependency of [build { ListOutputs(node)} ]");
 
-                foreach (FileArtifact output in processOutputs.GetOutputFiles())
-                {
-                    if (node.Inputs.Contains(output.Path))
-                    {
-                        processBuilder.AddInputFile(output);
-                    }
-                }
             }
         }
 

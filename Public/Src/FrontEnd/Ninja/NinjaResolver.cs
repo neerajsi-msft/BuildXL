@@ -75,6 +75,10 @@ namespace BuildXL.FrontEnd.Ninja
 
         private bool? TryEvaluate(ModuleDefinition module, QualifierId qualifierId)    // TODO: Async?
         {
+            if (m_ninjaResolverSettings.Projects != null)
+            {
+                return TryEvaluateProjects(module, qualifierId);
+            }
             
             NinjaGraphWithModuleDefinition result = m_ninjaWorkspaceResolver.ComputedProjectGraph.Result;
             
@@ -98,6 +102,49 @@ namespace BuildXL.FrontEnd.Ninja
                 });
 
             return graphConstructor.TrySchedulePips(filteredNodes, qualifierId);
+        }
+
+        private bool TryEvaluateProjects(ModuleDefinition module, QualifierId qualifierId)
+        {
+            var projects = m_ninjaWorkspaceResolver.Projects;
+            if (!NinjaGraphStitcher.TrySort(projects, m_context.PathTable, out var nodes, out var error))
+            {
+                Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
+                    m_ninjaResolverSettings.Location(m_context.PathTable), error);
+                return false;
+            }
+
+            var sharedState = new NinjaPipConstructor.SharedState();
+            var constructors = new Dictionary<NinjaNode, NinjaPipConstructor>();
+            foreach (var project in projects)
+            {
+                var constructor = new NinjaPipConstructor(
+                    m_context, m_host, m_frontEndName, module, qualifierId, project.Root, project.SpecFile,
+                    new NinjaPipConstructionSettings
+                    {
+                        UserDefinedEnvironment = project.Environment,
+                        UserDefinedPassthroughVariables = project.PassthroughVariables,
+                        UntrackingSettings = m_ninjaResolverSettings,
+                        AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
+                    }, sharedState, project.Name);
+                foreach (var node in project.Nodes)
+                {
+                    constructors.Add(node, constructor);
+                }
+            }
+
+            foreach (var node in nodes)
+            {
+                if (!constructors[node].TrySchedulePip(node, qualifierId, out _))
+                {
+                    Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
+                        m_ninjaResolverSettings.Location(m_context.PathTable),
+                        $"Failed to schedule stitched Ninja rule '{node.Rule}'. See the preceding pip diagnostics.");
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <inheritdoc/>

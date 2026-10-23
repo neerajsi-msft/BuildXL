@@ -43,6 +43,76 @@ recipe that claims ownership of the same files.
 ## Building with BuildXL
 After [installing BuildXL](../../Wiki/Installation.md), one can run the project pointing to the `config.dsc` configuration file: `bxl /c:config.dsc`. 
 
+## Experimental grouped Ninja graphs
+
+Use `projects` within one Ninja resolver to connect separately generated graphs.
+Each project has its own working directory, Ninja entry point, targets and
+explicit environment. This does not automatically connect separate resolvers.
+
+```typescript
+config({
+    resolvers: [{
+        kind: "Ninja",
+        moduleName: "Workspace",
+        projects: [
+            {
+                name: "consumer",
+                root: d`consumer`,
+                environment: Map.empty<string, string>()
+                    .add("PATH", "/usr/bin:/bin")
+                    .add("PACKAGE_MODE", "consumer"),
+            },
+            {
+                name: "producer",
+                root: d`producer`,
+                specFile: f`producer/build/build.ninja`,
+                environment: Map.empty<string, string>()
+                    .add("PATH", "/usr/bin:/bin")
+                    .add("PACKAGE_MODE", "producer"),
+            },
+        ],
+        additionalOutputDirectories: [p`sdk`],
+    }],
+});
+```
+
+Do not combine `projects` with resolver-level `root`, `specFile`, `targets` or
+`environment`. Project names must be unique (case-insensitively). Each project
+must specify a root or spec file, and an environment map. Omitting `specFile`
+uses `build.ninja` in the project root; omitting `targets` imports its default
+targets. Relative paths inside each Ninja graph use that project's root.
+Configuration path literals such as `specFile` remain relative to the config.
+
+The project environment is a complete specification, not an overlay on another
+project or the host environment. An empty map hides user environment variables;
+BuildXL still supplies its normal OS/sandbox environment. Tracked values
+participate in pip fingerprints. Existing environment data and
+`Unit.unit()` passthrough declarations are supported, but passthrough values do
+not invalidate cached results and must not control build outputs. Do not embed
+secrets in graphs or configuration files.
+
+Before scheduling, the resolver indexes declared outputs across the imported
+graphs, resolves matching file inputs to their producers, and topologically
+sorts the combined graph. Project list order is not execution order. Duplicate
+producers and cycles fail graph construction rather than permitting SDK
+multiwrites. Ordinary source inputs continue to use sandbox-observed reads
+for incremental dependency tracking.
+
+This prototype stitches explicit file paths only. Producers must be present in
+the selected/default target closures. It does not infer dependencies from
+commands, discover generated-header producers from runtime reads, or translate
+package-install scripts into declared outputs. Declare generated files and
+their consumers explicitly, including SDK installation/copy edges.
+
+Upstream `ckati` can generate the component graphs without modifications.
+For example, run `mkdir -p build && ckati --ninja --ninja_dir=build` from each project's root,
+then reference `build/build.ninja` in its configuration. Supply the runtime
+variables from each Make invocation in the corresponding project environment:
+Kati's generated `env*.sh` files are not imported automatically. Generation-time
+Make conditionals and shell expressions still require the correct environment
+when invoking Kati and regeneration when those inputs change. Graphs requiring
+upstream generated configuration may still need staged generation.
+
 ## Examples
 In the Examples folder in this repository you can find:
 - an example [plain Ninja project](../../../Examples/NinjaHelloWorld/). that you can build following the [instructions](../../../Examples/NinjaHelloWorld/README.md)

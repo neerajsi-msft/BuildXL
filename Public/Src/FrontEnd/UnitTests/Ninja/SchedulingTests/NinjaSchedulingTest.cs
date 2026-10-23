@@ -11,6 +11,9 @@ using BuildXL.Utilities.Configuration.Mutable;
 using Test.BuildXL.FrontEnd.Ninja.Infrastructure;
 using Test.BuildXL.TestUtilities.Xunit;
 using Xunit;
+using BuildXL.FrontEnd.Ninja;
+using BuildXL.FrontEnd.Ninja.Serialization;
+using BuildXL.Utilities.Configuration.Resolvers;
 
 namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
 {
@@ -74,6 +77,75 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
                 Assert.IsType<AbsolutePath>(remapped.AdditionalOutputDirectories[0].GetValue()));
             XAssert.AreEqual(RelativePath.Create(newPaths.StringTable, relative),
                 Assert.IsType<RelativePath>(remapped.AdditionalOutputDirectories[1].GetValue()));
+        }
+
+        private NinjaProject Project(string name, params NinjaNode[] nodes) =>
+            new NinjaProject(new NinjaProjectSettings
+            {
+                Name = name,
+                Root = TestPath,
+                Environment = new Dictionary<string, EnvironmentData>(),
+            }, PathTable) { Nodes = nodes };
+
+        [Fact]
+        public void StitchingSortsCrossGraphDependencies()
+        {
+            var producer = CreateNinjaNode(rule: "producer", outputs: Paths("header.h"));
+            var consumer = CreateNinjaNode(rule: "consumer", inputs: Paths("header.h"), outputs: Paths("consumer.o"));
+
+            Assert.True(NinjaGraphStitcher.TrySort(new[] { Project("consumer", consumer), Project("producer", producer) },
+                PathTable, out var sorted, out var error), error);
+            Assert.Equal(new[] { producer, consumer }, sorted);
+        }
+
+        [Fact]
+        public void StitchingRejectsDuplicateOutputs()
+        {
+            var first = CreateNinjaNode(rule: "first", outputs: Paths("header.h"));
+            var second = CreateNinjaNode(rule: "second", outputs: Paths("header.h"));
+
+            Assert.False(NinjaGraphStitcher.TrySort(new[] { Project("first-project", first), Project("second-project", second) },
+                PathTable, out _, out var error));
+            Assert.Contains("Duplicate Ninja producer", error);
+            Assert.Contains("first-project", error);
+            Assert.Contains("second-project", error);
+        }
+
+        [Fact]
+        public void StitchingRejectsCrossGraphCycles()
+        {
+            var first = CreateNinjaNode(rule: "first", inputs: Paths("second.out"), outputs: Paths("first.out"));
+            var second = CreateNinjaNode(rule: "second", inputs: Paths("first.out"), outputs: Paths("second.out"));
+
+            Assert.False(NinjaGraphStitcher.TrySort(new[] { Project("first-project", first), Project("second-project", second) },
+                PathTable, out _, out var error));
+            Assert.Contains("Cycle", error);
+            Assert.Contains("first-project", error);
+            Assert.Contains("second-project", error);
+        }
+
+        [Fact]
+        public void GroupedProjectPathsAreRemapped()
+        {
+            var newPaths = new PathTable();
+            AbsolutePath.Create(newPaths, Path.GetFullPath("unrelated"));
+            var settings = new NinjaResolverSettings
+            {
+                Projects = new[] { new NinjaProjectSettings
+                {
+                    Name = "project",
+                    Root = TestPath,
+                    SpecFile = TestPath.Combine(PathTable, "nested").Combine(PathTable, "build.ninja"),
+                    Targets = new[] { "all" },
+                    Environment = new Dictionary<string, EnvironmentData>(),
+                } },
+            };
+
+            var remapped = new NinjaResolverSettings(settings, new PathRemapper(PathTable, newPaths));
+            Assert.Equal(TestPath.ToString(PathTable), remapped.Projects[0].Root.ToString(newPaths));
+            Assert.Equal(settings.Projects[0].SpecFile.ToString(PathTable), remapped.Projects[0].SpecFile.ToString(newPaths));
+            Assert.Equal("all", Assert.Single(remapped.Projects[0].Targets));
+            Assert.Empty(remapped.Projects[0].Environment);
         }
 
         [FactIfSupported(requiresWindowsBasedOperatingSystem: true)]

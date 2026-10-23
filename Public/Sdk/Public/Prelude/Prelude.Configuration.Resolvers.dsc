@@ -956,8 +956,28 @@ interface JavaScriptCommandDependency {
 /**
  * Resolver for projects specified for the Ninja build system
  */
+interface NinjaProject {
+    /** Unique name within the group. */
+    name: string;
+    /** Working directory and base for relative Ninja paths. Inferred from specFile if omitted. */
+    root?: Directory;
+    /** Defaults to build.ninja under root. */
+    specFile?: File;
+    /** Targets to import, or the graph's default targets. */
+    targets?: string[];
+    /** Complete project environment; an empty map hides user variables. */
+    environment: Map<string, (PassthroughEnvironmentVariable | EnvironmentData)>;
+}
+
 interface NinjaResolver extends ResolverBase, UntrackingSettings {
     kind: "Ninja";
+
+    /**
+     * Experimental: import and stitch multiple graphs by declared file paths.
+     * Each project retains its root and environment. Requires unique producers.
+     * Cannot be combined with resolver-level root, specFile, targets or environment.
+     */
+    projects?: NinjaProject[];
 
     /**
      * High-level targets to explore

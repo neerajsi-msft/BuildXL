@@ -12,6 +12,12 @@ namespace BuildXL.Utilities.Configuration
     public interface INinjaResolverSettings : IProjectGraphResolverSettings
     {
         /// <summary>
+        /// Optional group of graphs to stitch by declared input/output paths.
+        /// Mutually exclusive with resolver-level Root, SpecFile, Targets and Environment.
+        /// </summary>
+        IReadOnlyList<INinjaProjectSettings> Projects { get; }
+
+        /// <summary>
         /// Targets to resolve
         /// </summary>
         IReadOnlyList<string> Targets { get; }
