@@ -25,6 +25,30 @@ rm packages-microsoft-prod.deb
 sudo apt-get install -y dotnet-sdk-6.0 
 ```
 
+## eBPF kernel compatibility
+
+The eBPF sandbox uses `sched_process_exit` when its kernel BTF prototype exposes
+`group_dead`, and falls back to `taskstats_exit` on older kernels. At least one
+of these hooks is required: process exit reports are needed to drain file-access
+reports and finish tracking the process tree. Disabling exit reporting is not safe.
+Other required sandbox probes must also be supported by the running kernel;
+this fallback only removes the dependency on task accounting for exit reports.
+
+Readlink reporting prefers the `readlink` and `readlinkat` syscall entry/exit
+tracepoints, avoiding dependency on a compiler-inlined or cloned `do_readlinkat`
+symbol. Kernels without these tracepoints retain the original `do_readlinkat`
+hooks. Symlink traversal uses `pick_link` when available in BTF, otherwise
+`step_into` and `security_inode_follow_link`.
+
+The eBPF sandbox also requires bpffs mounted at `/sys/fs/bpf`:
+
+```bash
+sudo mount -t bpf bpf /sys/fs/bpf
+```
+
+To mount it on subsequent starts, add `bpf /sys/fs/bpf bpf defaults 0 0` to
+`/etc/fstab` if an equivalent entry does not already exist.
+
 ## Install/configure git credentials provider
 
 * follow https://github.com/GitCredentialManager/git-credential-manager#linux
