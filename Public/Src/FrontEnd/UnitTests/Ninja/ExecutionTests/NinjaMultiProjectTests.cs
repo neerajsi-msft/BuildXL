@@ -119,5 +119,69 @@ default final.txt
             AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
             AssertLogContains(false, cycle ? "Cycle in stitched Ninja graphs" : "Duplicate Ninja producer");
         }
+
+        private ICommandLineConfiguration CreateDirectoryConfiguration(string export = "sdk", string producer = "producer")
+        {
+            var config = CreateConfiguration();
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(path, File.ReadAllText(path)
+                .Replace("name: 'producer',", $"name: 'producer', directoryExports: [p`{export}`],")
+                .Replace("name: 'consumer',", $"name: 'consumer', directoryImports: Map.empty<string, Path[]>().add('{producer}', [p`sdk`]),"));
+            File.WriteAllText(Path.Combine(SourceRoot, "consumer", "build.ninja"),
+                "rule consume\n  command = cat ../sdk/shared.txt > $out\nbuild final.txt: consume\ndefault final.txt\n");
+            return config;
+        }
+
+        [Theory]
+        [InlineData("producer")]
+        [InlineData("PrOdUcEr")]
+        public void DirectoryImportsUseProducedArtifactsWithoutExplicitMemberInputs(string producer)
+        {
+            var result = RunEngineWithConfig(CreateDirectoryConfiguration(producer: producer));
+            Assert.True(result.IsSuccess);
+            Assert.Equal("producer:producer-local", File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+            var processes = result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>().ToList();
+            var consumer = processes.Single(process => process.DirectoryDependencies.Length != 0);
+            Assert.DoesNotContain(consumer.Dependencies, file => file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "shared.txt");
+            Assert.Single(consumer.DirectoryDependencies);
+            Assert.Contains(result.EngineState.PipGraph.RetrievePipsOfType(PipType.SealDirectory).OfType<SealDirectory>(),
+                seal => seal.Kind == SealDirectoryKind.Partial && seal.Contents.Any(file => file.IsOutputFile));
+        }
+
+        [Theory]
+        [InlineData("empty", "producer", "empty or contains outputs")]
+        [InlineData("sdk", "unknown", "missing, unknown, or self-owned")]
+        public void RejectsInvalidDirectoryContracts(string export, string producer, string diagnostic)
+        {
+            Assert.False(RunEngineWithConfig(CreateDirectoryConfiguration(export, producer)).IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
+            AssertLogContains(false, diagnostic);
+        }
+
+        [Theory]
+        [InlineData("directoryExports: [p`sdk`],", "empty or contains outputs")]
+        [InlineData("directoryExports: [p`consumer`, p`consumer/subdir`],", "Overlapping Ninja directory exports")]
+        public void RejectsInvalidOrOverlappingDirectoryExports(string declaration, string diagnostic)
+        {
+            var config = CreateDirectoryConfiguration();
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(path, File.ReadAllText(path).Replace("name: 'consumer',", $"name: 'consumer', {declaration}"));
+            Assert.False(RunEngineWithConfig(config).IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
+            AssertLogContains(false, diagnostic);
+        }
+
+        [Fact]
+        public void RejectsDirectoryImportCycles()
+        {
+            var config = CreateDirectoryConfiguration();
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(path, File.ReadAllText(path)
+                .Replace("name: 'consumer',", "name: 'consumer', directoryExports: [p`consumer`],")
+                .Replace("name: 'producer',", "name: 'producer', directoryImports: Map.empty<string, Path[]>().add('consumer', [p`consumer`]),"));
+            Assert.False(RunEngineWithConfig(config).IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
+            AssertLogContains(false, "Cycle in stitched Ninja graphs");
+        }
     }
 }

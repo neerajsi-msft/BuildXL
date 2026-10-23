@@ -40,6 +40,8 @@ namespace BuildXL.FrontEnd.Ninja
         {
             public readonly ConcurrentDictionary<NinjaNode, ProcessOutputs> ProcessOutputs = new();
             public readonly ConcurrentDictionary<AbsolutePath, FileArtifact> OutputFileArtifacts = new();
+            public readonly Dictionary<(string, AbsolutePath), DirectoryArtifact> SealedDirectories = new();
+            public readonly Dictionary<(string, AbsolutePath), AbsolutePath[]> DirectoryMembers = new();
         }
 
         private readonly ConcurrentDictionary<NinjaNode, ProcessOutputs> m_processOutputs;
@@ -48,6 +50,8 @@ namespace BuildXL.FrontEnd.Ninja
         private readonly NinjaPipConstructionSettings m_settings;
         private readonly IEnumerable<KeyValuePair<string, string>> m_userDefinedEnvironment;
         private readonly IEnumerable<string> m_userDefinedPassthroughVariables;
+        private readonly SharedState m_sharedState;
+        private readonly IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> m_directoryImports;
 
         public NinjaPipConstructor(FrontEndContext context, 
             FrontEndHost frontEndHost, 
@@ -58,7 +62,8 @@ namespace BuildXL.FrontEnd.Ninja
             AbsolutePath specPath,
             NinjaPipConstructionSettings settings,
             SharedState sharedState = null,
-            string projectName = null)
+            string projectName = null,
+            IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> directoryImports = null)
         {
             Contract.Requires(context != null);
             Contract.Requires(frontEndHost != null);
@@ -73,6 +78,8 @@ namespace BuildXL.FrontEnd.Ninja
             m_specPath = specPath;
             m_settings = settings;
             sharedState ??= new SharedState();
+            m_sharedState = sharedState;
+            m_directoryImports = directoryImports ?? new Dictionary<string, IReadOnlyList<AbsolutePath>>();
             m_processOutputs = sharedState.ProcessOutputs;
             m_outputFileArtifacts = sharedState.OutputFileArtifacts;
             m_pipConstructionHelper = GetPipConstructionHelperForModule(m_projectRoot, moduleDefinition, qualifierId, projectName);
@@ -183,6 +190,10 @@ namespace BuildXL.FrontEnd.Ninja
                 // Process all outputs and inputs
                 AddOutputs(node, processBuilder);
                 AddInputs(node, processBuilder);
+                if (!TryAddDirectoryInputs(processBuilder))
+                {
+                    return false;
+                }
 
                 // Try to schedule the process pip
                 if (!m_pipConstructionHelper.TryAddProcess(processBuilder, out ProcessOutputs outputs, out process))
@@ -201,6 +212,36 @@ namespace BuildXL.FrontEnd.Ninja
                 return true;
             }
 
+        }
+
+        private bool TryAddDirectoryInputs(ProcessBuilder processBuilder)
+        {
+            foreach (var import in m_directoryImports)
+            {
+                foreach (var root in import.Value)
+                {
+                    var key = (import.Key, root);
+                    if (!m_sharedState.SealedDirectories.TryGetValue(key, out var directory))
+                    {
+                        var files = m_sharedState.DirectoryMembers[key].Select(path => m_outputFileArtifacts[path]).ToArray();
+                        if (!m_pipConstructionHelper.TrySealDirectory(
+                            root,
+                            SortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>.CloneAndSort(files, OrdinalFileArtifactComparer.Instance),
+                            CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                            SealDirectoryKind.Partial, null, $"Ninja directory export '{import.Key}': {root.ToString(m_context.PathTable)}",
+                            null, out directory))
+                        {
+                            return false;
+                        }
+
+                        m_sharedState.SealedDirectories.Add(key, directory);
+                    }
+
+                    processBuilder.AddInputDirectory(directory);
+                }
+            }
+
+            return true;
         }
 
         private void AddInputs(NinjaNode node, ProcessBuilder processBuilder)

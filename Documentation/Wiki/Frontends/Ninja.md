@@ -98,8 +98,36 @@ producers and cycles fail graph construction rather than permitting SDK
 multiwrites. Ordinary source inputs continue to use sandbox-observed reads
 for incremental dependency tracking.
 
-This prototype stitches explicit file paths only. Producers must be present in
-the selected/default target closures. It does not infer dependencies from
+Projects can also export static output directories and import them by producer
+name and root:
+
+```typescript
+// Producer project:
+directoryExports: [p`sdk/include/example`],
+// Consumer project:
+directoryImports: Map.empty<string, Path[]>()
+    .add("producer", [p`sdk/include/example`]),
+```
+
+The resolver derives exact membership from the producer's declared file output
+artifacts under that root, without enumerating disk or requiring member lists
+in configuration. It creates a partial seal and adds a directory dependency to
+each process in the importing project. All member producers precede consumers;
+file contents affect consumer cache lookup only when actually read or otherwise
+observed. Explicit Ninja file inputs retain their original meaning and are not
+removed by directory imports.
+
+Exports must be nonempty, nonoverlapping, and contain only file outputs owned by
+the named project. Unknown projects/roots, missing exports, self-imports, and
+cycles (including cycles combining file and directory dependencies) fail with
+project/root diagnostics. Dynamic shared-opaque contents are not discovered or
+silently promoted to static membership. Output paths must already be declared
+by real producers; a phony install recipe with hidden file writes is insufficient.
+Runtime generated-file access violations retain the importing project's pip
+identity and accessed path in standard sandbox diagnostics.
+
+Producers must be present in the selected/default target closures.
+The resolver does not infer dependencies from
 commands, discover generated-header producers from runtime reads, or translate
 package-install scripts into declared outputs. Declare generated files and
 their consumers explicitly, including SDK installation/copy edges.

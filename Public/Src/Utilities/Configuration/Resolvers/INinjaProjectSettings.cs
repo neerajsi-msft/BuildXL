@@ -26,5 +26,11 @@ namespace BuildXL.Utilities.Configuration
 
         /// <summary>Explicit environment for this project, including passthrough declarations.</summary>
         IReadOnlyDictionary<string, EnvironmentData> Environment { get; }
+
+        /// <summary>Partial seals derived from this project's declared file outputs, never disk enumeration.</summary>
+        IReadOnlyList<AbsolutePath> DirectoryExports { get; }
+
+        /// <summary>Producer project names and exported directory roots consumed by every process in this project.</summary>
+        IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> DirectoryImports { get; }
     }
 }

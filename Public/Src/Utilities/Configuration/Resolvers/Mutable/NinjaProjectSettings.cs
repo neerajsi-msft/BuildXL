@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Generic;
+using System.Linq;
 using BuildXL.Utilities.Configuration.Resolvers;
 using BuildXL.Utilities.Core;
 
@@ -21,6 +22,9 @@ namespace BuildXL.Utilities.Configuration.Mutable
             SpecFile = pathRemapper.Remap(template.SpecFile);
             Targets = template.Targets;
             Environment = template.Environment;
+            DirectoryExports = template.DirectoryExports == null ? null : pathRemapper.Remap(template.DirectoryExports);
+            DirectoryImports = template.DirectoryImports?.ToDictionary(
+                pair => pair.Key, pair => pair.Value == null ? null : (IReadOnlyList<AbsolutePath>)pathRemapper.Remap(pair.Value));
         }
 
         /// <inheritdoc />
@@ -33,5 +37,9 @@ namespace BuildXL.Utilities.Configuration.Mutable
         public IReadOnlyList<string> Targets { get; set; }
         /// <inheritdoc />
         public IReadOnlyDictionary<string, EnvironmentData> Environment { get; set; }
+        /// <inheritdoc />
+        public IReadOnlyList<AbsolutePath> DirectoryExports { get; set; }
+        /// <inheritdoc />
+        public IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> DirectoryImports { get; set; }
     }
 }

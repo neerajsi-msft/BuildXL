@@ -138,6 +138,11 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
                     SpecFile = TestPath.Combine(PathTable, "nested").Combine(PathTable, "build.ninja"),
                     Targets = new[] { "all" },
                     Environment = new Dictionary<string, EnvironmentData>(),
+                    DirectoryExports = new[] { TestPath.Combine(PathTable, "export") },
+                    DirectoryImports = new Dictionary<string, IReadOnlyList<AbsolutePath>>
+                    {
+                        ["producer"] = new[] { TestPath.Combine(PathTable, "import") },
+                    },
                 } },
             };
 
@@ -146,6 +151,10 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
             Assert.Equal(settings.Projects[0].SpecFile.ToString(PathTable), remapped.Projects[0].SpecFile.ToString(newPaths));
             Assert.Equal("all", Assert.Single(remapped.Projects[0].Targets));
             Assert.Empty(remapped.Projects[0].Environment);
+            Assert.Equal(settings.Projects[0].DirectoryExports[0].ToString(PathTable),
+                Assert.Single(remapped.Projects[0].DirectoryExports).ToString(newPaths));
+            Assert.Equal(settings.Projects[0].DirectoryImports["producer"][0].ToString(PathTable),
+                Assert.Single(remapped.Projects[0].DirectoryImports["producer"]).ToString(newPaths));
         }
 
         [FactIfSupported(requiresWindowsBasedOperatingSystem: true)]

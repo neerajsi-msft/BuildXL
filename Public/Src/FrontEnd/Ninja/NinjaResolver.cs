@@ -1,8 +1,10 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.ContractsLight;
+using System.Linq;
 using System.Threading.Tasks;
 using BuildXL.FrontEnd.Ninja.Serialization;
 using BuildXL.FrontEnd.Sdk;
@@ -115,9 +117,17 @@ namespace BuildXL.FrontEnd.Ninja
             }
 
             var sharedState = new NinjaPipConstructor.SharedState();
+            var projectNames = projects.ToDictionary(project => project.Name, project => project.Name, StringComparer.OrdinalIgnoreCase);
             var constructors = new Dictionary<NinjaNode, NinjaPipConstructor>();
             foreach (var project in projects)
             {
+                foreach (var root in project.DirectoryExports)
+                {
+                    sharedState.DirectoryMembers.Add((project.Name, root), project.Nodes
+                        .Where(node => node.Rule != "phony").SelectMany(node => node.Outputs)
+                        .Where(path => path.IsWithin(m_context.PathTable, root)).Distinct().ToArray());
+                }
+
                 var constructor = new NinjaPipConstructor(
                     m_context, m_host, m_frontEndName, module, qualifierId, project.Root, project.SpecFile,
                     new NinjaPipConstructionSettings
@@ -126,7 +136,8 @@ namespace BuildXL.FrontEnd.Ninja
                         UserDefinedPassthroughVariables = project.PassthroughVariables,
                         UntrackingSettings = m_ninjaResolverSettings,
                         AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
-                    }, sharedState, project.Name);
+                    }, sharedState, project.Name, project.DirectoryImports.ToDictionary(
+                        import => projectNames[import.Key], import => import.Value));
                 foreach (var node in project.Nodes)
                 {
                     constructors.Add(node, constructor);

@@ -967,6 +967,10 @@ interface NinjaProject {
     targets?: string[];
     /** Complete project environment; an empty map hides user variables. */
     environment: Map<string, (PassthroughEnvironmentVariable | EnvironmentData)>;
+    /** Partial seals of this project's declared file outputs below each root. Empty exports are errors. */
+    directoryExports?: Path[];
+    /** Producer project and exported roots. Availability is ordered; only observed member reads affect caching. */
+    directoryImports?: Map<string, Path[]>;
 }
 
 interface NinjaResolver extends ResolverBase, UntrackingSettings {
