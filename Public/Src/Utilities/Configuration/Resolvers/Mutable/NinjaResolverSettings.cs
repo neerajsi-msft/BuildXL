@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Generic;
+using System.Linq;
 using BuildXL.Utilities.Configuration.Resolvers;
 using BuildXL.Utilities.Configuration.Resolvers.Mutable;
 using BuildXL.Utilities.Core;
@@ -24,17 +25,25 @@ namespace BuildXL.Utilities.Configuration.Mutable
         public NinjaResolverSettings(INinjaResolverSettings template, PathRemapper pathRemapper) : base(template, template, pathRemapper)
         {
             Targets = template.Targets;
+            Projects = template.Projects?.Select(project => project == null ? null : new NinjaProjectSettings(project, pathRemapper)).ToList();
             Root = pathRemapper.Remap(template.Root);
             ModuleName = template.ModuleName;
             KeepProjectGraphFile = template.KeepProjectGraphFile;
             SpecFile = pathRemapper.Remap(template.SpecFile);
             Environment = template.Environment;
-            AdditionalOutputDirectories = template.AdditionalOutputDirectories;
+            AdditionalOutputDirectories = template.AdditionalOutputDirectories?.Select(directory =>
+                directory.GetValue() is AbsolutePath absolutePath
+                    ? new DiscriminatingUnion<AbsolutePath, RelativePath>(pathRemapper.Remap(absolutePath))
+                    : new DiscriminatingUnion<AbsolutePath, RelativePath>(pathRemapper.Remap((RelativePath)directory.GetValue())))
+                .ToList();
             EnableProjectGraphVerboseLogging = template.EnableProjectGraphVerboseLogging;
         }
 
         /// <inheritdoc />
         public IReadOnlyList<string> Targets { get; set; }
+
+        /// <inheritdoc />
+        public IReadOnlyList<INinjaProjectSettings> Projects { get; set; }
 
         /// <summary>
         /// Root of the project. Typically, where the build.ninja file is located

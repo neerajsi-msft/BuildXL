@@ -36,12 +36,24 @@ namespace BuildXL.FrontEnd.Ninja
         private readonly AbsolutePath m_specPath;
 
         private readonly PipConstructionHelper m_pipConstructionHelper;
-        private readonly ConcurrentDictionary<NinjaNode, ProcessOutputs> m_processOutputs = new ConcurrentDictionary<NinjaNode, ProcessOutputs>();
-        private readonly ConcurrentDictionary<AbsolutePath, FileArtifact> m_outputFileArtifacts = new ConcurrentDictionary<AbsolutePath, FileArtifact>();
+        internal sealed class SharedState
+        {
+            public readonly ConcurrentDictionary<NinjaNode, ProcessOutputs> ProcessOutputs = new();
+            public readonly ConcurrentDictionary<AbsolutePath, FileArtifact> OutputFileArtifacts = new();
+            public readonly Dictionary<(string, AbsolutePath), DirectoryArtifact> SealedDirectories = new();
+            public readonly Dictionary<(string, AbsolutePath), AbsolutePath[]> DirectoryMembers = new();
+        }
+
+        private readonly ConcurrentDictionary<NinjaNode, ProcessOutputs> m_processOutputs;
+        private readonly ConcurrentDictionary<AbsolutePath, FileArtifact> m_outputFileArtifacts;
         private readonly ConcurrentDictionary<string, AbsolutePath> m_exeLocations = new ConcurrentDictionary<string, AbsolutePath>();
         private readonly NinjaPipConstructionSettings m_settings;
         private readonly IEnumerable<KeyValuePair<string, string>> m_userDefinedEnvironment;
         private readonly IEnumerable<string> m_userDefinedPassthroughVariables;
+        private readonly SharedState m_sharedState;
+        private readonly IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> m_directoryImports;
+        private readonly IReadOnlyList<AbsolutePath> m_directoryOutputs;
+        private readonly string m_projectName;
 
         public NinjaPipConstructor(FrontEndContext context, 
             FrontEndHost frontEndHost, 
@@ -50,7 +62,11 @@ namespace BuildXL.FrontEnd.Ninja
             QualifierId qualifierId, 
             AbsolutePath projectRoot, 
             AbsolutePath specPath,
-            NinjaPipConstructionSettings settings)
+            NinjaPipConstructionSettings settings,
+            SharedState sharedState = null,
+            string projectName = null,
+            IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> directoryImports = null,
+            IReadOnlyList<AbsolutePath> directoryOutputs = null)
         {
             Contract.Requires(context != null);
             Contract.Requires(frontEndHost != null);
@@ -64,7 +80,14 @@ namespace BuildXL.FrontEnd.Ninja
             m_projectRoot = projectRoot;
             m_specPath = specPath;
             m_settings = settings;
-            m_pipConstructionHelper = GetPipConstructionHelperForModule(m_projectRoot, moduleDefinition, qualifierId);
+            sharedState ??= new SharedState();
+            m_sharedState = sharedState;
+            m_directoryImports = directoryImports ?? new Dictionary<string, IReadOnlyList<AbsolutePath>>();
+            m_directoryOutputs = directoryOutputs ?? Array.Empty<AbsolutePath>();
+            m_projectName = projectName;
+            m_processOutputs = sharedState.ProcessOutputs;
+            m_outputFileArtifacts = sharedState.OutputFileArtifacts;
+            m_pipConstructionHelper = GetPipConstructionHelperForModule(m_projectRoot, moduleDefinition, qualifierId, projectName);
             m_frontEndName = frontEndName;
             PrepareEnvironment(settings.UserDefinedEnvironment, settings.UserDefinedPassthroughVariables, out m_userDefinedEnvironment, out m_userDefinedPassthroughVariables);
         }
@@ -98,7 +121,7 @@ namespace BuildXL.FrontEnd.Ninja
             return true;
         }
 
-        private PipConstructionHelper GetPipConstructionHelperForModule(AbsolutePath projectRoot, ModuleDefinition moduleDefinition, QualifierId qualifierId)
+        private PipConstructionHelper GetPipConstructionHelperForModule(AbsolutePath projectRoot, ModuleDefinition moduleDefinition, QualifierId qualifierId, string projectName)
         {
             // One and only one AbsolutePath in the specs (corresponding to the build.ninja
             // If this changed, this method would be out of here, as we would need a different PipConstructionHelper
@@ -106,8 +129,20 @@ namespace BuildXL.FrontEnd.Ninja
             Contract.Requires(moduleDefinition.Specs.Count == 1);
 
             // Get a symbol that is unique for this particular instance
-            var fullSymbol = FullSymbol.Create(m_context.SymbolTable, $"ninja.{PipConstructionUtilities.SanitizeStringForSymbol(moduleDefinition.Descriptor.Name)}"); // TODO: Figure this out, complete
+            var symbolName = $"ninja.{PipConstructionUtilities.SanitizeStringForSymbol(moduleDefinition.Descriptor.Name)}";
+            if (projectName != null)
+            {
+                // A separate symbol gives each project's construction helper a distinct pip identity.
+                symbolName += "." + PipConstructionUtilities.SanitizeStringForSymbol(projectName) + "_" +
+                    PipConstructionUtilities.ComputeSha256(projectName);
+            }
+            var fullSymbol = FullSymbol.Create(m_context.SymbolTable, symbolName);
             AbsolutePath pathToSpec = moduleDefinition.Specs.First();
+            if (projectName != null)
+            {
+                // The group owns one synthetic spec; individual Ninja files are tracked during graph extraction.
+                projectRoot = moduleDefinition.Root;
+            }
             if (!projectRoot.TryGetRelative(m_context.PathTable, pathToSpec, out var specRelativePath))
             {
                 // Issue a warning and continue with Invalid path. PipConstructionHelper will just ignore
@@ -160,6 +195,10 @@ namespace BuildXL.FrontEnd.Ninja
                 // Process all outputs and inputs
                 AddOutputs(node, processBuilder);
                 AddInputs(node, processBuilder);
+                if (!TryAddDirectoryInputs(processBuilder))
+                {
+                    return false;
+                }
 
                 // Try to schedule the process pip
                 if (!m_pipConstructionHelper.TryAddProcess(processBuilder, out ProcessOutputs outputs, out process))
@@ -174,35 +213,73 @@ namespace BuildXL.FrontEnd.Ninja
                 {
                     m_outputFileArtifacts[output.Path] = output;
                 }
+                foreach (var root in m_directoryOutputs)
+                {
+                    m_sharedState.SealedDirectories.Add((m_projectName, root),
+                        outputs.GetOutputDirectories().Single(output => output.Root.Path == root).Root);
+                }
 
                 return true;
             }
 
         }
 
+        private bool TryAddDirectoryInputs(ProcessBuilder processBuilder)
+        {
+            foreach (var import in m_directoryImports)
+            {
+                foreach (var root in import.Value)
+                {
+                    var key = (import.Key, root);
+                    if (!m_sharedState.SealedDirectories.TryGetValue(key, out var directory))
+                    {
+                        var files = m_sharedState.DirectoryMembers[key].Select(path => m_outputFileArtifacts[path]).ToArray();
+                        if (!m_pipConstructionHelper.TrySealDirectory(
+                            root,
+                            SortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>.CloneAndSort(files, OrdinalFileArtifactComparer.Instance),
+                            CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                            SealDirectoryKind.Partial, null, $"Ninja directory export '{import.Key}': {root.ToString(m_context.PathTable)}",
+                            null, out directory))
+                        {
+                            return false;
+                        }
+
+                        m_sharedState.SealedDirectories.Add(key, directory);
+                    }
+
+                    processBuilder.AddInputDirectory(directory);
+                }
+            }
+
+            return true;
+        }
+
         private void AddInputs(NinjaNode node, ProcessBuilder processBuilder)
         {
 
-            foreach (AbsolutePath input in node.Inputs.Where(i => !m_outputFileArtifacts.ContainsKey(i))) // We only want source files. If the file is in m_outputFileArtifacts then it was output by someone else
-            {                                                                                       // and we have that dependency expressed in node.
-                processBuilder.AddInputFile(FileArtifact.CreateSourceFile(input));
+            foreach (AbsolutePath input in node.Inputs)
+            {
+                if (!m_outputFileArtifacts.ContainsKey(input)
+                    && m_directoryImports.Any(import => import.Value.Any(root =>
+                        !m_sharedState.DirectoryMembers.ContainsKey((import.Key, root))
+                        && input.IsWithin(m_context.PathTable, root))))
+                {
+                    continue;
+                }
+
+                processBuilder.AddInputFile(m_outputFileArtifacts.TryGetValue(input, out var produced)
+                    ? produced
+                    : FileArtifact.CreateSourceFile(input));
             }
 
             foreach (NinjaNode dependency in node.Dependencies)
             {
 
-                bool outputsPresent = m_processOutputs.TryGetValue(dependency, out ProcessOutputs processOutputs);
+                bool outputsPresent = m_processOutputs.ContainsKey(dependency);
 
                 string ListOutputs(NinjaNode n) => string.Join(" ", n.Outputs.Select(x => x.GetName(m_context.PathTable).ToString(m_context.StringTable)).ToList());
                 Contract.Assert(outputsPresent, $"Pips must have been presented in dependency order: [build { ListOutputs(dependency) }] missing, dependency of [build { ListOutputs(node)} ]");
 
-                foreach (FileArtifact output in processOutputs.GetOutputFiles())
-                {
-                    if (node.Inputs.Contains(output.Path))
-                    {
-                        processBuilder.AddInputFile(output);
-                    }
-                }
             }
         }
 
@@ -224,6 +301,10 @@ namespace BuildXL.FrontEnd.Ninja
             }
 
             processBuilder.AddOutputDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(m_projectRoot), SealDirectoryKind.SharedOpaque);
+            foreach (var root in m_directoryOutputs.Where(root => root != m_projectRoot))
+            {
+                processBuilder.AddOutputDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(root), SealDirectoryKind.SharedOpaque);
+            }
             
             // Add additional output directories configured in the main config file
             PipConstructionUtilities.AddAdditionalOutputDirectories(processBuilder, m_settings.AdditionalOutputDirectories, m_projectRoot, m_context.PathTable);
@@ -231,7 +312,18 @@ namespace BuildXL.FrontEnd.Ninja
 
         private bool TryConfigureProcessBuilder(ProcessBuilder processBuilder, NinjaNode node, QualifierId qualifierId)
         {
-            SeparateExecutableFromCommands(node.Command, out string executable, out string args);
+            string executable;
+            string args;
+            if (OperatingSystemHelper.IsLinuxOS)
+            {
+                // Ninja commands are shell command lines, not argv strings.
+                executable = "/bin/sh";
+                args = node.Command;
+            }
+            else
+            {
+                SeparateExecutableFromCommands(node.Command, out executable, out args);
+            }
 
             if (!TryFindExecutablePath(executable, out AbsolutePath exePath))
             {
@@ -246,8 +338,14 @@ namespace BuildXL.FrontEnd.Ninja
             using (var pipDataBuilderWrapper = m_context.GetPipDataBuilder())
             {
                 var pipDataBuilder = pipDataBuilderWrapper.Instance;
+                if (OperatingSystemHelper.IsLinuxOS)
+                {
+                    pipDataBuilder.Add("-c");
+                }
                 pipDataBuilder.Add(args);
-                processBuilder.ArgumentsBuilder.Add(pipDataBuilder.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping));
+                processBuilder.ArgumentsBuilder.Add(pipDataBuilder.ToPipData(
+                    OperatingSystemHelper.IsLinuxOS ? " " : string.Empty,
+                    OperatingSystemHelper.IsLinuxOS ? PipDataFragmentEscaping.CRuntimeArgumentRules : PipDataFragmentEscaping.NoEscaping));
             }
 
 
@@ -277,9 +375,7 @@ namespace BuildXL.FrontEnd.Ninja
             processBuilder.RewritePolicy = RewritePolicy.DefaultSafe;
             processBuilder.EnableTempDirectory();
 
-            // Working directory - the directory containing the ninja spec file 
-            // Ninja generators may express paths relative to this
-            processBuilder.WorkingDirectory = DirectoryArtifact.CreateWithZeroPartialSealId(m_specPath.GetParent(m_context.PathTable));
+            processBuilder.WorkingDirectory = DirectoryArtifact.CreateWithZeroPartialSealId(m_projectRoot);
 
             // Untrack directories
             UntrackFilesAndDirectories(processBuilder.WorkingDirectory, processBuilder);

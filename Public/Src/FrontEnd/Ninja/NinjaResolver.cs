@@ -1,8 +1,10 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.ContractsLight;
+using System.Linq;
 using System.Threading.Tasks;
 using BuildXL.FrontEnd.Ninja.Serialization;
 using BuildXL.FrontEnd.Sdk;
@@ -75,6 +77,10 @@ namespace BuildXL.FrontEnd.Ninja
 
         private bool? TryEvaluate(ModuleDefinition module, QualifierId qualifierId)    // TODO: Async?
         {
+            if (m_ninjaResolverSettings.Projects != null)
+            {
+                return TryEvaluateProjects(module, qualifierId);
+            }
             
             NinjaGraphWithModuleDefinition result = m_ninjaWorkspaceResolver.ComputedProjectGraph.Result;
             
@@ -98,6 +104,58 @@ namespace BuildXL.FrontEnd.Ninja
                 });
 
             return graphConstructor.TrySchedulePips(filteredNodes, qualifierId);
+        }
+
+        private bool TryEvaluateProjects(ModuleDefinition module, QualifierId qualifierId)
+        {
+            var projects = m_ninjaWorkspaceResolver.Projects;
+            if (!NinjaGraphStitcher.TrySort(projects, m_context.PathTable, out var nodes, out var error))
+            {
+                Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
+                    m_ninjaResolverSettings.Location(m_context.PathTable), error);
+                return false;
+            }
+
+            var sharedState = new NinjaPipConstructor.SharedState();
+            var projectNames = projects.ToDictionary(project => project.Name, project => project.Name, StringComparer.OrdinalIgnoreCase);
+            var constructors = new Dictionary<NinjaNode, NinjaPipConstructor>();
+            foreach (var project in projects)
+            {
+                foreach (var root in project.DirectoryExports)
+                {
+                    sharedState.DirectoryMembers.Add((project.Name, root), project.Nodes
+                        .Where(node => node.Rule != "phony").SelectMany(node => node.Outputs)
+                        .Where(path => path.IsWithin(m_context.PathTable, root)).Distinct().ToArray());
+                }
+
+                var constructor = new NinjaPipConstructor(
+                    m_context, m_host, m_frontEndName, module, qualifierId, project.Root, project.SpecFile,
+                    new NinjaPipConstructionSettings
+                    {
+                        UserDefinedEnvironment = project.Environment,
+                        UserDefinedPassthroughVariables = project.PassthroughVariables,
+                        UntrackingSettings = m_ninjaResolverSettings,
+                        AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
+                    }, sharedState, project.Name, project.DirectoryImports.ToDictionary(
+                        import => projectNames[import.Key], import => import.Value), project.DirectoryOutputs);
+                foreach (var node in project.Nodes)
+                {
+                    constructors.Add(node, constructor);
+                }
+            }
+
+            foreach (var node in nodes)
+            {
+                if (!constructors[node].TrySchedulePip(node, qualifierId, out _))
+                {
+                    Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
+                        m_ninjaResolverSettings.Location(m_context.PathTable),
+                        $"Failed to schedule stitched Ninja rule '{node.Rule}'. See the preceding pip diagnostics.");
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <inheritdoc/>
