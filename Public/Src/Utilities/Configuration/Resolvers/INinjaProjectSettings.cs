@@ -30,6 +30,9 @@ namespace BuildXL.Utilities.Configuration
         /// <summary>Partial seals derived from this project's declared file outputs, never disk enumeration.</summary>
         IReadOnlyList<AbsolutePath> DirectoryExports { get; }
 
+        /// <summary>Dynamic shared-opaque outputs of a project containing exactly one executable node.</summary>
+        IReadOnlyList<AbsolutePath> DirectoryOutputs { get; }
+
         /// <summary>Producer project names and exported directory roots consumed by every process in this project.</summary>
         IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> DirectoryImports { get; }
     }

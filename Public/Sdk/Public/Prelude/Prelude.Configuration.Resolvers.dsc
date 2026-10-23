@@ -969,6 +969,8 @@ interface NinjaProject {
     environment: Map<string, (PassthroughEnvironmentVariable | EnvironmentData)>;
     /** Partial seals of this project's declared file outputs below each root. Empty exports are errors. */
     directoryExports?: Path[];
+    /** Dynamic shared-opaque outputs, also importable by other projects. Requires exactly one executable node. */
+    directoryOutputs?: Path[];
     /** Producer project and exported roots. Availability is ordered; only observed member reads affect caching. */
     directoryImports?: Map<string, Path[]>;
 }

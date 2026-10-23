@@ -159,6 +159,142 @@ default final.txt
         }
 
         [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void DynamicDirectoryOutputsDiscoverMembersAndReplayCache(bool explicitMemberInput)
+        {
+            var config = CreateDirectoryConfiguration();
+            ((CommandLineConfiguration)config).Cache.CacheGraph = false;
+            ((CommandLineConfiguration)config).Cache.AllowFetchingCachedGraphFromContentCache = false;
+            var configPath = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(configPath, File.ReadAllText(configPath)
+                .Replace("directoryExports:", "directoryOutputs:"));
+            File.WriteAllText(Path.Combine(SourceRoot, "producer", "build.ninja"),
+                "rule produce\n  command = mkdir -p ../sdk && cat local.txt > ../sdk/dynamic.txt && touch $out\n" +
+                "build done: produce local.txt\ndefault done\n");
+            File.WriteAllText(Path.Combine(SourceRoot, "consumer", "build.ninja"),
+                "rule consume\n  command = cat ../sdk/dynamic.txt > $out\nbuild final.txt: consume" +
+                (explicitMemberInput ? " ../sdk/dynamic.txt" : "") + "\ndefault final.txt\n");
+
+            var cache = new TestCache();
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            var final = Path.Combine(SourceRoot, "consumer", "final.txt");
+            Assert.Equal("producer-local", File.ReadAllText(final));
+            File.Delete(final);
+            File.Delete(Path.Combine(SourceRoot, "sdk", "dynamic.txt"));
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            Assert.Equal("producer-local", File.ReadAllText(final));
+
+            File.WriteAllText(Path.Combine(SourceRoot, "producer", "local.txt"), "changed");
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            Assert.Equal("changed", File.ReadAllText(final));
+        }
+
+        [Fact]
+        public void RejectsAmbiguousDynamicDirectoryProducer()
+        {
+            var config = CreateDirectoryConfiguration();
+            var configPath = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(configPath, File.ReadAllText(configPath)
+                .Replace("directoryExports:", "directoryOutputs:"));
+            File.AppendAllText(Path.Combine(SourceRoot, "producer", "build.ninja"),
+                "\nbuild extra: produce local.txt\ndefault extra\n");
+            Assert.False(RunEngineWithConfig(config).IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
+            AssertLogContains(false, "exactly one executable node");
+        }
+
+        [Fact]
+        public void EmptyDynamicDirectoriesCanBeImported()
+        {
+            var config = CreateDirectoryConfiguration();
+            var configPath = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(configPath, File.ReadAllText(configPath)
+                .Replace("directoryExports:", "directoryOutputs:"));
+            File.WriteAllText(Path.Combine(SourceRoot, "producer", "build.ninja"),
+                "rule produce\n  command = mkdir -p ../sdk && touch $out\nbuild done: produce\ndefault done\n");
+            File.WriteAllText(Path.Combine(SourceRoot, "consumer", "build.ninja"),
+                "rule consume\n  command = test -d ../sdk && printf empty > $out\nbuild final.txt: consume\ndefault final.txt\n");
+            var cache = new TestCache();
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            Directory.Delete(Path.Combine(SourceRoot, "sdk"));
+            File.Delete(Path.Combine(SourceRoot, "consumer", "final.txt"));
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            Assert.Equal("empty", File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+        }
+
+        [Fact]
+        public void DynamicImportsPreserveOtherProducersExplicitFileInputs()
+        {
+            var config = CreateConfiguration();
+            var configPath = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(configPath, File.ReadAllText(configPath)
+                .Replace("name: 'consumer',",
+                    "name: 'consumer', directoryImports: Map.empty<string, Path[]>().add('other', [p`sdk`]),")
+                .Replace("projects: [", @"projects: [{
+                    name: 'other', root: d`other`, directoryOutputs: [p`sdk`],
+                    environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
+                },"));
+            Directory.CreateDirectory(Path.Combine(SourceRoot, "other"));
+            File.WriteAllText(Path.Combine(SourceRoot, "other", "build.ninja"),
+                "rule produce\n  command = mkdir -p ../sdk && printf dynamic: > ../sdk/dynamic.txt && touch $out\n" +
+                "build done: produce\ndefault done\n");
+            File.WriteAllText(Path.Combine(SourceRoot, "consumer", "build.ninja"),
+                "rule consume\n  command = cat ../sdk/dynamic.txt ../sdk/shared.txt > $out\n" +
+                "build final.txt: consume ../sdk/dynamic.txt ../sdk/shared.txt\ndefault final.txt\n");
+            var result = RunEngineWithConfig(config);
+            Assert.True(result.IsSuccess);
+            Assert.Equal("dynamic:producer:producer-local",
+                File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+            var consumer = result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>()
+                .Single(process => process.DirectoryDependencies.Length != 0);
+            Assert.Contains(consumer.Dependencies, file => file.IsOutputFile &&
+                file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "shared.txt");
+            Assert.DoesNotContain(consumer.Dependencies, file =>
+                file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "dynamic.txt");
+        }
+
+        [Fact]
+        public void DynamicMembershipChangesRemoveStaleMembers()
+        {
+            var config = CreateDirectoryConfiguration();
+            var configPath = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(configPath, File.ReadAllText(configPath)
+                .Replace("directoryExports:", "directoryOutputs:"));
+            File.WriteAllText(Path.Combine(SourceRoot, "producer", "build.ninja"),
+                "rule produce\n  command = mkdir -p ../sdk && cat local.txt > ../sdk/$$(cat local.txt).h && touch $out\n" +
+                "build done: produce local.txt\ndefault done\n");
+            File.WriteAllText(Path.Combine(SourceRoot, "consumer", "build.ninja"),
+                "rule consume\n  command = cat ../sdk/*.h > $out\nbuild final.txt: consume\ndefault final.txt\n");
+            var cache = new TestCache();
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            File.WriteAllText(Path.Combine(SourceRoot, "producer", "local.txt"), "renamed");
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            Assert.Equal("renamed", File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+            Assert.False(File.Exists(Path.Combine(SourceRoot, "sdk", "producer-local.h")));
+            Assert.True(File.Exists(Path.Combine(SourceRoot, "sdk", "renamed.h")));
+        }
+
+        [Fact]
+        public void StaticDirectoryImportsPreserveExplicitSourceFileInputs()
+        {
+            var config = CreateDirectoryConfiguration();
+            Directory.CreateDirectory(Path.Combine(SourceRoot, "sdk"));
+            File.WriteAllText(Path.Combine(SourceRoot, "sdk", "source.txt"), "source:");
+            File.WriteAllText(Path.Combine(SourceRoot, "consumer", "build.ninja"),
+                "rule consume\n  command = cat ../sdk/source.txt ../sdk/shared.txt > $out\n" +
+                "build final.txt: consume ../sdk/source.txt\ndefault final.txt\n");
+            var result = RunEngineWithConfig(config);
+            Assert.True(result.IsSuccess);
+            Assert.Equal("source:producer:producer-local",
+                File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+            var consumer = result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>()
+                .Single(process => process.DirectoryDependencies.Length != 0);
+            Assert.Contains(consumer.Dependencies, file => file.IsSourceFile &&
+                file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "source.txt");
+        }
+
+        [Theory]
         [InlineData("directoryExports: [p`sdk`],", "empty or contains outputs")]
         [InlineData("directoryExports: [p`consumer`, p`consumer/subdir`],", "Overlapping Ninja directory exports")]
         public void RejectsInvalidOrOverlappingDirectoryExports(string declaration, string diagnostic)

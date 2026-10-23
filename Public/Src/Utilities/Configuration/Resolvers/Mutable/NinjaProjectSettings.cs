@@ -23,6 +23,7 @@ namespace BuildXL.Utilities.Configuration.Mutable
             Targets = template.Targets;
             Environment = template.Environment;
             DirectoryExports = template.DirectoryExports == null ? null : pathRemapper.Remap(template.DirectoryExports);
+            DirectoryOutputs = template.DirectoryOutputs == null ? null : pathRemapper.Remap(template.DirectoryOutputs);
             DirectoryImports = template.DirectoryImports?.ToDictionary(
                 pair => pair.Key, pair => pair.Value == null ? null : (IReadOnlyList<AbsolutePath>)pathRemapper.Remap(pair.Value));
         }
@@ -39,6 +40,8 @@ namespace BuildXL.Utilities.Configuration.Mutable
         public IReadOnlyDictionary<string, EnvironmentData> Environment { get; set; }
         /// <inheritdoc />
         public IReadOnlyList<AbsolutePath> DirectoryExports { get; set; }
+        /// <inheritdoc />
+        public IReadOnlyList<AbsolutePath> DirectoryOutputs { get; set; }
         /// <inheritdoc />
         public IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> DirectoryImports { get; set; }
     }

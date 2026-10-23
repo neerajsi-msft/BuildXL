@@ -47,6 +47,29 @@ namespace BuildXL.FrontEnd.Ninja
             var exports = new Dictionary<(string, AbsolutePath), HashSet<NinjaNode>>();
             foreach (var project in projects)
             {
+                if (project.DirectoryOutputs.Count != 0 && project.Nodes.Count(node => node.Rule != "phony") != 1)
+                {
+                    error = $"Project '{project.Name}' with directoryOutputs must contain exactly one executable node.";
+                    return false;
+                }
+
+                foreach (var root in project.DirectoryOutputs)
+                {
+                    if (!root.IsValid || exports.ContainsKey((project.Name, root))
+                        || project.DirectoryExports.Contains(root)
+                        || project.DirectoryOutputs.Any(other => other != root &&
+                            (root.IsWithin(pathTable, other) || other.IsWithin(pathTable, root))))
+                    {
+                        error = $"Invalid or duplicate directory output in project '{project.Name}'.";
+                        return false;
+                    }
+
+                    exports.Add((project.Name, root), project.Nodes.Where(node => node.Rule != "phony").ToHashSet());
+                }
+            }
+
+            foreach (var project in projects)
+            {
                 foreach (var root in project.DirectoryExports)
                 {
                     if (!root.IsValid || exports.ContainsKey((project.Name, root)))

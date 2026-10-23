@@ -137,7 +137,7 @@ namespace BuildXL.FrontEnd.Ninja
                         UntrackingSettings = m_ninjaResolverSettings,
                         AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
                     }, sharedState, project.Name, project.DirectoryImports.ToDictionary(
-                        import => projectNames[import.Key], import => import.Value));
+                        import => projectNames[import.Key], import => import.Value), project.DirectoryOutputs);
                 foreach (var node in project.Nodes)
                 {
                     constructors.Add(node, constructor);

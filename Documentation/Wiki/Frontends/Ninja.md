@@ -126,6 +126,36 @@ by real producers; a phony install recipe with hidden file writes is insufficien
 Runtime generated-file access violations retain the importing project's pip
 identity and accessed path in standard sandbox diagnostics.
 
+### Dynamic directory outputs
+
+For a coarse project with exactly one non-phony node in the selected graph,
+use `directoryOutputs` instead of listing generated filenames:
+
+```typescript
+// Producer project (one executable node, plus optional phony aliases):
+directoryOutputs: [p`sdk/include/generated`],
+// Consumer project:
+directoryImports: Map.empty<string, Path[]>()
+    .add("producer", [p`sdk/include/generated`]),
+```
+
+These are dynamic shared-opaque outputs and are automatically exported. The
+producer declares its completion marker or other known outputs in Ninja; its
+recipe can generate additional files under the configured directory roots.
+Importers receive the actual produced directory artifact, including members
+unknown during graph construction, rather than a partial seal. Empty directories
+are allowed. Producer ordering and cache content tracking apply to dynamic
+members too; an explicit Ninja input under an imported directory is not
+misclassified as a source file. Known produced file inputs retain their explicit
+artifact dependencies, including when another producer shares the same SDK
+parent directory.
+
+Roots within one project's `directoryOutputs` must be valid, distinct, and
+nonoverlapping, and must not duplicate its `directoryExports`. Shared roots
+across dynamic producers are allowed: each shared-opaque artifact contains only
+its own producer's files. This does not authorize two producers to write the
+same file; normal sandbox and graph multiwrite checks still apply.
+
 Producers must be present in the selected/default target closures.
 The resolver does not infer dependencies from
 commands, discover generated-header producers from runtime reads, or translate

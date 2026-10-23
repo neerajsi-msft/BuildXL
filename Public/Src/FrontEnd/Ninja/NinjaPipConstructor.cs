@@ -52,6 +52,8 @@ namespace BuildXL.FrontEnd.Ninja
         private readonly IEnumerable<string> m_userDefinedPassthroughVariables;
         private readonly SharedState m_sharedState;
         private readonly IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> m_directoryImports;
+        private readonly IReadOnlyList<AbsolutePath> m_directoryOutputs;
+        private readonly string m_projectName;
 
         public NinjaPipConstructor(FrontEndContext context, 
             FrontEndHost frontEndHost, 
@@ -63,7 +65,8 @@ namespace BuildXL.FrontEnd.Ninja
             NinjaPipConstructionSettings settings,
             SharedState sharedState = null,
             string projectName = null,
-            IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> directoryImports = null)
+            IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> directoryImports = null,
+            IReadOnlyList<AbsolutePath> directoryOutputs = null)
         {
             Contract.Requires(context != null);
             Contract.Requires(frontEndHost != null);
@@ -80,6 +83,8 @@ namespace BuildXL.FrontEnd.Ninja
             sharedState ??= new SharedState();
             m_sharedState = sharedState;
             m_directoryImports = directoryImports ?? new Dictionary<string, IReadOnlyList<AbsolutePath>>();
+            m_directoryOutputs = directoryOutputs ?? Array.Empty<AbsolutePath>();
+            m_projectName = projectName;
             m_processOutputs = sharedState.ProcessOutputs;
             m_outputFileArtifacts = sharedState.OutputFileArtifacts;
             m_pipConstructionHelper = GetPipConstructionHelperForModule(m_projectRoot, moduleDefinition, qualifierId, projectName);
@@ -208,6 +213,11 @@ namespace BuildXL.FrontEnd.Ninja
                 {
                     m_outputFileArtifacts[output.Path] = output;
                 }
+                foreach (var root in m_directoryOutputs)
+                {
+                    m_sharedState.SealedDirectories.Add((m_projectName, root),
+                        outputs.GetOutputDirectories().Single(output => output.Root.Path == root).Root);
+                }
 
                 return true;
             }
@@ -249,6 +259,14 @@ namespace BuildXL.FrontEnd.Ninja
 
             foreach (AbsolutePath input in node.Inputs)
             {
+                if (!m_outputFileArtifacts.ContainsKey(input)
+                    && m_directoryImports.Any(import => import.Value.Any(root =>
+                        !m_sharedState.DirectoryMembers.ContainsKey((import.Key, root))
+                        && input.IsWithin(m_context.PathTable, root))))
+                {
+                    continue;
+                }
+
                 processBuilder.AddInputFile(m_outputFileArtifacts.TryGetValue(input, out var produced)
                     ? produced
                     : FileArtifact.CreateSourceFile(input));
@@ -283,6 +301,10 @@ namespace BuildXL.FrontEnd.Ninja
             }
 
             processBuilder.AddOutputDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(m_projectRoot), SealDirectoryKind.SharedOpaque);
+            foreach (var root in m_directoryOutputs.Where(root => root != m_projectRoot))
+            {
+                processBuilder.AddOutputDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(root), SealDirectoryKind.SharedOpaque);
+            }
             
             // Add additional output directories configured in the main config file
             PipConstructionUtilities.AddAdditionalOutputDirectories(processBuilder, m_settings.AdditionalOutputDirectories, m_projectRoot, m_context.PathTable);

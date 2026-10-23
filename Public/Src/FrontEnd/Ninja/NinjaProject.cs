@@ -19,6 +19,7 @@ namespace BuildXL.FrontEnd.Ninja
         public ICollection<string> PassthroughVariables { get; }
         public IReadOnlyCollection<NinjaNode> Nodes { get; set; }
         public IReadOnlyList<AbsolutePath> DirectoryExports { get; }
+        public IReadOnlyList<AbsolutePath> DirectoryOutputs { get; }
         public IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> DirectoryImports { get; }
 
         public NinjaProject(INinjaProjectSettings settings, PathTable pathTable)
@@ -28,6 +29,7 @@ namespace BuildXL.FrontEnd.Ninja
             SpecFile = settings.SpecFile.IsValid ? settings.SpecFile : Root.Combine(pathTable, "build.ninja");
             Targets = settings.Targets;
             DirectoryExports = settings.DirectoryExports ?? System.Array.Empty<AbsolutePath>();
+            DirectoryOutputs = settings.DirectoryOutputs ?? System.Array.Empty<AbsolutePath>();
             DirectoryImports = settings.DirectoryImports ?? new Dictionary<string, IReadOnlyList<AbsolutePath>>();
             global::BuildXL.Utilities.Configuration.Mutable.ResolverSettings.ComputeEnvironment(
                 settings.Environment, pathTable, out var environment, out var passthrough, out _);
