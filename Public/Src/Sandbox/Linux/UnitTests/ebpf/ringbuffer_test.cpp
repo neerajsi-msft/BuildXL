@@ -1,5 +1,6 @@
 #include <functional>
 #include <cstdint>
+#include <chrono>
 
 #include <bpf/bpf.h>
 #include "bpf/bpf.h"
@@ -11,6 +12,7 @@
 #include "ConcurrentQueue.h"
 #include "ebpfcommon.h"
 #include "EventRingBuffer.hpp"
+#include "BpfMapUtilities.hpp"
 #include "test_utils.hpp"
 
 int g_file_access_per_pip_fd = -1;
@@ -150,7 +152,63 @@ int DoExceedCapacity(buildxl::linux::ebpf::EventRingBuffer *buffer) {
     return 0;
 }
 
+int TestMapCleanup() {
+    LIBBPF_OPTS(bpf_map_create_opts, options, .map_flags = BPF_F_NO_PREALLOC);
+    int fd = bpf_map_create(BPF_MAP_TYPE_HASH, "cleanup_test", sizeof(uint32_t), sizeof(uint32_t), 1U << 22, &options);
+    if (fd < 0) {
+        fprintf(stderr, "Failed to create cleanup test map: %s\n", strerror(errno));
+        return 1;
+    }
+
+    auto fail = [fd](const char *message) {
+        fprintf(stderr, "%s\n", message);
+        close(fd);
+        return 1;
+    };
+
+    if (buildxl::linux::ebpf::ClearBpfMap(fd, sizeof(uint32_t))) {
+        return fail("Failed to clear an empty map");
+    }
+
+    for (uint32_t key = 0; key < 16384; key++) {
+        if (bpf_map_update_elem(fd, &key, &key, BPF_ANY)) {
+            return fail("Failed to populate sparse cleanup test map");
+        }
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    if (buildxl::linux::ebpf::ClearBpfMap(fd, sizeof(uint32_t))) {
+        return fail("Failed to clear a populated map");
+    }
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    if (elapsed > std::chrono::seconds(5)) {
+        return fail("Sparse PID map cleanup exceeded five seconds");
+    }
+
+    uint32_t key;
+    if (bpf_map_get_next_key(fd, nullptr, &key) == 0 || errno != ENOENT) {
+        return fail("Map cleanup left entries behind");
+    }
+    if (buildxl::linux::ebpf::ClearBpfMap(fd, sizeof(uint32_t))) {
+        return fail("Repeated map cleanup failed");
+    }
+    if (buildxl::linux::ebpf::ClearBpfMap(-1, sizeof(uint32_t)) != -EBADF) {
+        return fail("Map cleanup did not report an invalid descriptor");
+    }
+
+    printf("Sparse map cleanup passed in %.3f seconds\n", std::chrono::duration<double>(elapsed).count());
+    close(fd);
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (TestMapCleanup()) {
+        return 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "--map-cleanup-only") == 0) {
+        return 0;
+    }
+
     // Initialize the BxlObserver
     g_bxl = BxlObserver::GetInstance();
     g_bxl->Init();

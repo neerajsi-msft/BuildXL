@@ -31,6 +31,7 @@
  * BuildXL includes
  */
 #include "EventRingBuffer.hpp"
+#include "BpfMapUtilities.hpp"
 #include "bxl_observer.hpp"
 #include "ConcurrentQueue.h"
 #include "SyscallHandler.h"
@@ -1240,7 +1241,7 @@ int SetupMaps(struct sandbox_bpf *skel) {
 }
 
 // Defensively cleans up all the pinned maps that we have created.
-void CleanupPinnedMaps(struct sandbox_bpf *skel) {
+int CleanupPinnedMaps(struct sandbox_bpf *skel) {
     // We don't care about cleaning up the debug ring buffer map, ring buffers should get clean up automatically
     bpf_map* pinned_maps[PINNED_MAPS_SIZE] = {
         skel->maps.pid_map, 
@@ -1259,26 +1260,13 @@ void CleanupPinnedMaps(struct sandbox_bpf *skel) {
     for (int i = 0 ; i < PINNED_MAPS_SIZE; i++) {
         bpf_map* pinned_map = pinned_maps[i];
 
-        // Retrieve the key size and create a buffer to store it
-        __u32 key_size = bpf_map__key_size(pinned_map);
-        // use char so alignment is respected
-        auto key = new char[key_size];
-
-        int res = bpf_map__get_next_key(pinned_map, NULL, key, key_size);
-        while (res != -ENOENT)
+        int res = buildxl::linux::ebpf::ClearBpfMap(bpf_map__fd(pinned_map), bpf_map__key_size(pinned_map));
+        if (res)
         {
-            if (bpf_map__delete_elem(pinned_map, key, key_size, /* flags */ 0))
-            {
-                // We don't really care if the deletion fails, we are doing this defensively anyway.
-                // But make sure we don't loop forever
-                break;
-            }
-
-            res = bpf_map__get_next_key(pinned_map, NULL, key, key_size);
+            return LogError("Failed to clear pinned map %s: %s\n", bpf_map__name(pinned_map), strerror(-res));
         }
-
-        delete[] key;
     }
+    return 0;
 }
 
 unsigned int GetMaxConcurrency()
@@ -1444,7 +1432,11 @@ int Start(sandbox_bpf *skel, char **argv) {
         // If we are in a forced loading scenario, we don't want to clean up the pinned maps since this is likely a test running as part of a build
         if (!g_ebpf_already_loaded)
         {
-            CleanupPinnedMaps(skel);
+            if (CleanupPinnedMaps(skel))
+            {
+                Cleanup(skel);
+                return -1;
+            }
         }
     }
     else {
