@@ -300,8 +300,12 @@ namespace BuildXL.FrontEnd.Ninja
                 }
             }
 
-            processBuilder.AddOutputDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(m_projectRoot), SealDirectoryKind.SharedOpaque);
-            foreach (var root in m_directoryOutputs.Where(root => root != m_projectRoot))
+            if (m_settings.AllowWritableSourceDirectory)
+            {
+                processBuilder.AddOutputDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(m_projectRoot), SealDirectoryKind.SharedOpaque);
+            }
+
+            foreach (var root in m_directoryOutputs.Where(root => !m_settings.AllowWritableSourceDirectory || root != m_projectRoot))
             {
                 processBuilder.AddOutputDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(root), SealDirectoryKind.SharedOpaque);
             }

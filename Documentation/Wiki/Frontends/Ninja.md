@@ -30,6 +30,13 @@ If this is not the case, a `specFile` property (commented out in the example abo
 Paths in the Ninja graph are resolved relative to `root`, even when `specFile`
 is stored in a build-output subdirectory.
 
+By default each project root is also an implicit shared opaque output directory.
+For builds that keep sources immutable, set `allowWritableSourceDirectory: false`
+on the resolver and declare writable roots with `additionalOutputDirectories`
+or project `directoryOutputs`. This leaves command working directories unchanged.
+Configure source mounts as non-writable and output mounts as writable; explicitly
+declared file and directory outputs still undergo normal mount validation.
+
 The full set of options to configure the `Ninja` resolver can be found [here](../../../Public/Sdk/Public/Prelude/Prelude.Configuration.Resolvers.dsc), defined under `interface NinjaResolver`.
 
 On Linux, commands run through `/bin/sh -c`, matching Ninja's shell semantics,

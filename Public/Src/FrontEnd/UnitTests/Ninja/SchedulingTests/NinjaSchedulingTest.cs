@@ -79,6 +79,30 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
                 Assert.IsType<RelativePath>(remapped.AdditionalOutputDirectories[1].GetValue()));
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ProjectRootOutputHonorsSourceWritePolicy(bool writable)
+        {
+            var settings = new NinjaResolverSettings
+            {
+                AllowWritableSourceDirectory = writable,
+                AdditionalOutputDirectories = new[]
+                {
+                    new DiscriminatingUnion<AbsolutePath, RelativePath>(TestPath.Combine(PathTable, "outputs")),
+                },
+            };
+            var node = CreateNinjaNode(outputs: new[]
+            {
+                TestPath.Combine(PathTable, "outputs").Combine(PathTable, "product"),
+            }.ToReadOnlySet());
+            var process = Start(settings).Add(node).ScheduleAll().RetrieveSuccessfulProcess(node);
+
+            Assert.Equal(writable, process.DirectoryOutputs.Any(directory => directory.Path == TestPath));
+            Assert.Contains(process.DirectoryOutputs, directory => directory.Path == TestPath.Combine(PathTable, "outputs"));
+            Assert.Equal(writable, new NinjaResolverSettings(settings, new PathRemapper(PathTable, PathTable)).AllowWritableSourceDirectory);
+        }
+
         private NinjaProject Project(string name, params NinjaNode[] nodes) =>
             new NinjaProject(new NinjaProjectSettings
             {

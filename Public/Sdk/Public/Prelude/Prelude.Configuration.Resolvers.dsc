@@ -979,6 +979,12 @@ interface NinjaResolver extends ResolverBase, UntrackingSettings {
     kind: "Ninja";
 
     /**
+     * Whether each project root is implicitly a shared opaque output directory.
+     * Defaults to true. Set false for read-only sources with explicit output roots.
+     */
+    allowWritableSourceDirectory?: boolean;
+
+    /**
      * Experimental: import and stitch multiple graphs by declared file paths.
      * Each project retains its root and environment. Requires unique producers.
      * Cannot be combined with resolver-level root, specFile, targets or environment.

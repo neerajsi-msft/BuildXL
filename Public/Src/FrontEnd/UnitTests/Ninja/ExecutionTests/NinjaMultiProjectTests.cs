@@ -82,6 +82,47 @@ default final.txt
         }
 
         [Fact]
+        public void BuildsWithReadonlyProjectRootAndSeparateOutputs()
+        {
+            var config = Build()
+                .Configuration(@"
+config({
+    resolvers: [{
+        kind: 'Ninja',
+        moduleName: 'Readonly',
+        allowWritableSourceDirectory: false,
+        projects: [{
+            name: 'source',
+            root: d`source`,
+            environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
+        }],
+        additionalOutputDirectories: [p`out`],
+    }],
+    mounts: [{
+        name: a`Source`, path: p`.`,
+        trackSourceFileChanges: true, isWritable: false, isReadable: true,
+    }, {
+        name: a`Outputs`, path: p`out`,
+        trackSourceFileChanges: true, isWritable: true, isReadable: true,
+    }],
+});")
+                .AddSpec(Path.Combine(SourceRoot, "source", "build.ninja"), @"
+rule copy
+  command = mkdir -p ../out && cat input.txt > $out
+build ../out/result.txt: copy input.txt
+default ../out/result.txt
+")
+                .AddSpec(Path.Combine(SourceRoot, "source", "input.txt"), "original")
+                .PersistSpecsAndGetConfiguration();
+
+            var result = RunEngineWithConfig(config);
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal("original", File.ReadAllText(Path.Combine(SourceRoot, "out", "result.txt")));
+            Assert.Equal("original", File.ReadAllText(Path.Combine(SourceRoot, "source", "input.txt")));
+        }
+
+        [Fact]
         public void ProjectEnvironmentChangesInvalidateCachedResults()
         {
             var cache = new TestCache();

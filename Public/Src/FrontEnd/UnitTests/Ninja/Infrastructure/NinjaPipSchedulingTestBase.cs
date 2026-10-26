@@ -145,7 +145,8 @@ namespace Test.BuildXL.FrontEnd.Ninja.Infrastructure
                         UserDefinedEnvironment = environment,
                         UserDefinedPassthroughVariables = passthroughEnv,
                         UntrackingSettings = resolverSettings,
-                        AdditionalOutputDirectories = resolverSettings.AdditionalOutputDirectories
+                        AdditionalOutputDirectories = resolverSettings.AdditionalOutputDirectories,
+                        AllowWritableSourceDirectory = resolverSettings.AllowWritableSourceDirectory,
                     });
 
                 var schedulingResults = new Dictionary<NinjaNode, (bool, Process)>();

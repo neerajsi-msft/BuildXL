@@ -26,6 +26,9 @@ namespace BuildXL.FrontEnd.Ninja
         /// <inheritdoc cref="IUntrackingSettings" />
         public IUntrackingSettings UntrackingSettings { get; init; }
 
+        /// <inheritdoc cref="IResolverSettings.AllowWritableSourceDirectory" />
+        public bool AllowWritableSourceDirectory { get; init; }
+
         /// <inheritdoc cref="IProjectGraphResolverSettings.AdditionalOutputDirectories" />
         public IReadOnlyList<DiscriminatingUnion<AbsolutePath, RelativePath>> AdditionalOutputDirectories { get; init; }
     }

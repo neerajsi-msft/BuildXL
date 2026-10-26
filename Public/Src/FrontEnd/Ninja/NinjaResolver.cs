@@ -100,7 +100,8 @@ namespace BuildXL.FrontEnd.Ninja
                     UserDefinedEnvironment = m_ninjaWorkspaceResolver.TrackedEnvironmentVariables,
                     UserDefinedPassthroughVariables = m_ninjaWorkspaceResolver.UserDefinedPassthroughEnvironmentVariables,
                     UntrackingSettings = m_ninjaResolverSettings,
-                    AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories
+                    AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
+                    AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
                 });
 
             return graphConstructor.TrySchedulePips(filteredNodes, qualifierId);
@@ -136,6 +137,7 @@ namespace BuildXL.FrontEnd.Ninja
                         UserDefinedPassthroughVariables = project.PassthroughVariables,
                         UntrackingSettings = m_ninjaResolverSettings,
                         AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
+                        AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
                     }, sharedState, project.Name, project.DirectoryImports.ToDictionary(
                         import => projectNames[import.Key], import => import.Value), project.DirectoryOutputs);
                 foreach (var node in project.Nodes)
