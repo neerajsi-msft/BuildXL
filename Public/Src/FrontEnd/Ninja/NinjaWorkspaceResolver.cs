@@ -83,9 +83,9 @@ namespace BuildXL.FrontEnd.Ninja
             {
                 if (ResolverSettings.Projects.Count == 0 ||
                     ResolverSettings.Root.IsValid || ResolverSettings.SpecFile.IsValid ||
-                    ResolverSettings.Targets != null || ResolverSettings.Environment != null)
+                    ResolverSettings.Targets != null || ResolverSettings.Environment != null || ResolverSettings.SourceDirectories != null)
                 {
-                    return InvalidSettings("projects must be nonempty and cannot be combined with root, specFile, targets or environment at resolver level.");
+                    return InvalidSettings("projects must be nonempty and cannot be combined with root, specFile, targets, environment or sourceDirectories at resolver level.");
                 }
 
                 var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -115,11 +115,22 @@ namespace BuildXL.FrontEnd.Ninja
                     SpecFile = ResolverSettings.SpecFile,
                     Targets = ResolverSettings.Targets,
                     Environment = ResolverSettings.Environment,
+                    SourceDirectories = ResolverSettings.SourceDirectories,
                 }, Context.PathTable));
             }
 
             foreach (var project in projects)
             {
+                foreach (var source in project.SourceDirectories)
+                {
+                    if (source == null || !source.Root.IsValid ||
+                        (source.ExcludedPaths != null && source.ExcludedPaths.Any(path => !path.IsValid || path.IsEmpty)) ||
+                        (source.ExcludedNames != null && source.ExcludedNames.Any(name => !name.IsValid)))
+                    {
+                        return InvalidSettings("Each source directory needs a valid root and nonempty relative exclusions and entry names.");
+                    }
+                }
+
                 string path;
                 if (!Directory.Exists(path = project.Root.ToString(Context.PathTable)))
                 {

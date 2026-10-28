@@ -102,7 +102,7 @@ namespace BuildXL.FrontEnd.Ninja
                     UntrackingSettings = m_ninjaResolverSettings,
                     AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
                     AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
-                });
+                }, m_ninjaResolverSettings.SourceDirectories);
 
             return graphConstructor.TrySchedulePips(filteredNodes, qualifierId);
         }
@@ -139,7 +139,7 @@ namespace BuildXL.FrontEnd.Ninja
                         AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
                         AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
                     }, sharedState, project.Name, project.DirectoryImports.ToDictionary(
-                        import => projectNames[import.Key], import => import.Value), project.DirectoryOutputs);
+                        import => projectNames[import.Key], import => import.Value), project.DirectoryOutputs, project.SourceDirectories);
                 foreach (var node in project.Nodes)
                 {
                     constructors.Add(node, constructor);

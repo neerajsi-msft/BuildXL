@@ -147,7 +147,7 @@ namespace Test.BuildXL.FrontEnd.Ninja.Infrastructure
                         UntrackingSettings = resolverSettings,
                         AdditionalOutputDirectories = resolverSettings.AdditionalOutputDirectories,
                         AllowWritableSourceDirectory = resolverSettings.AllowWritableSourceDirectory,
-                    });
+                    }, sourceDirectories: resolverSettings.SourceDirectories);
 
                 var schedulingResults = new Dictionary<NinjaNode, (bool, Process)>();
 

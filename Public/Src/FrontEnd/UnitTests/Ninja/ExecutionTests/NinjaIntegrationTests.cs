@@ -42,6 +42,62 @@ namespace Test.BuildXL.FrontEnd.Ninja
             Assert.True(engineResult.IsSuccess);
         }
 
+        [TheoryIfSupported(requiresLinuxBasedOperatingSystem: true)]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public void SourceSealsEnforceExclusionsInBothResolverForms(bool grouped, bool excluded)
+        {
+            const string project = @"
+                root: d`source`,
+                environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
+                sourceDirectories: [{ root: d`source`, excludedNames: [a`.git`] }],
+            ";
+            var projectSettings = grouped ? $"projects: [{{ name: 'source', {project} }}]," : project;
+            var config = Build()
+                .Configuration($@"
+config({{
+    resolvers: [{{
+        kind: 'Ninja', moduleName: 'SealedSource',
+        allowWritableSourceDirectory: false,
+        {projectSettings}
+        additionalOutputDirectories: [p`out`],
+    }}],
+    mounts: [{{
+        name: a`Sources`, path: p`source`, isWritable: false,
+        isReadable: true, trackSourceFileChanges: true,
+    }}, {{
+        name: a`Outputs`, path: p`out`, isWritable: true, isReadable: true,
+    }}],
+}});")
+                .AddSpec(Path.Combine(SourceRoot, "source", "build.ninja"),
+                    "rule copy\n  command = mkdir -p ../out && cat " +
+                    (excluded ? ".git/config" : "input.txt") +
+                    " > $out\nbuild ../out/result.txt: copy\ndefault ../out/result.txt\n")
+                .AddSpec(Path.Combine(SourceRoot, "source", "input.txt"), "allowed")
+                .AddSpec(Path.Combine(SourceRoot, "source", ".git", "config"), "excluded")
+                .PersistSpecsAndGetConfiguration();
+            ((CommandLineConfiguration)config).Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = false;
+
+            var result = RunEngineWithConfig(config);
+            Assert.Equal(!excluded, result.IsSuccess);
+            if (excluded)
+            {
+                AssertVerboseEventLogged(global::BuildXL.Processes.Tracing.LogEventId.PipProcessDisallowedFileAccess, allowMore: true);
+                AssertVerboseEventLogged(global::BuildXL.Scheduler.Tracing.LogEventId.DependencyViolationMissingSourceDependency, allowMore: true);
+                AssertWarningEventLogged(global::BuildXL.Scheduler.Tracing.LogEventId.ProcessNotStoredToCacheDueToFileMonitoringViolations);
+                AssertErrorEventLogged(global::BuildXL.Scheduler.Tracing.LogEventId.FileMonitoringError);
+            }
+            else
+            {
+                var process = Assert.Single(result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>());
+                Assert.False(process.AllowUndeclaredSourceReads);
+                Assert.Single(process.DirectoryDependencies);
+                Assert.Equal("allowed", File.ReadAllText(Path.Combine(SourceRoot, "out", "result.txt")));
+            }
+        }
+
         [Fact]
         public void SpecFileCanBeInOutputSubdirectory()
         {

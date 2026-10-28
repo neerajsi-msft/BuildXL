@@ -54,6 +54,8 @@ namespace BuildXL.FrontEnd.Ninja
         private readonly IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> m_directoryImports;
         private readonly IReadOnlyList<AbsolutePath> m_directoryOutputs;
         private readonly string m_projectName;
+        private readonly IReadOnlyList<INinjaSourceDirectorySettings> m_sourceDirectories;
+        private readonly List<DirectoryArtifact> m_sourceSeals = new();
 
         public NinjaPipConstructor(FrontEndContext context, 
             FrontEndHost frontEndHost, 
@@ -66,7 +68,8 @@ namespace BuildXL.FrontEnd.Ninja
             SharedState sharedState = null,
             string projectName = null,
             IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> directoryImports = null,
-            IReadOnlyList<AbsolutePath> directoryOutputs = null)
+            IReadOnlyList<AbsolutePath> directoryOutputs = null,
+            IReadOnlyList<INinjaSourceDirectorySettings> sourceDirectories = null)
         {
             Contract.Requires(context != null);
             Contract.Requires(frontEndHost != null);
@@ -85,6 +88,7 @@ namespace BuildXL.FrontEnd.Ninja
             m_directoryImports = directoryImports ?? new Dictionary<string, IReadOnlyList<AbsolutePath>>();
             m_directoryOutputs = directoryOutputs ?? Array.Empty<AbsolutePath>();
             m_projectName = projectName;
+            m_sourceDirectories = sourceDirectories ?? Array.Empty<INinjaSourceDirectorySettings>();
             m_processOutputs = sharedState.ProcessOutputs;
             m_outputFileArtifacts = sharedState.OutputFileArtifacts;
             m_pipConstructionHelper = GetPipConstructionHelperForModule(m_projectRoot, moduleDefinition, qualifierId, projectName);
@@ -226,6 +230,32 @@ namespace BuildXL.FrontEnd.Ninja
 
         private bool TryAddDirectoryInputs(ProcessBuilder processBuilder)
         {
+            if (m_sourceSeals.Count == 0)
+            {
+                foreach (var source in m_sourceDirectories)
+                {
+                    var exclusions = new SourceSealExclusions(
+                        ReadOnlyArray<RelativePath>.From(source.ExcludedPaths?.ToArray() ?? Array.Empty<RelativePath>()),
+                        ReadOnlyArray<PathAtom>.From(source.ExcludedNames?.ToArray() ?? Array.Empty<PathAtom>()));
+                    if (!m_pipConstructionHelper.TrySealDirectory(
+                        source.Root,
+                        CollectionUtilities.EmptySortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>(OrdinalFileArtifactComparer.Instance),
+                        CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                        SealDirectoryKind.SourceAllDirectories, null, null, null, out var directory,
+                        sourceExclusions: exclusions))
+                    {
+                        return false;
+                    }
+
+                    m_sourceSeals.Add(directory);
+                }
+            }
+
+            foreach (var sourceSeal in m_sourceSeals)
+            {
+                processBuilder.AddInputDirectory(sourceSeal);
+            }
+
             foreach (var import in m_directoryImports)
             {
                 foreach (var root in import.Value)
@@ -374,7 +404,10 @@ namespace BuildXL.FrontEnd.Ninja
             }
 
             processBuilder.ToolDescription = StringId.Create(m_context.StringTable, GetNodeDescription(node));
-            processBuilder.Options |= Process.Options.AllowUndeclaredSourceReads;
+            if (m_sourceDirectories.Count == 0)
+            {
+                processBuilder.Options |= Process.Options.AllowUndeclaredSourceReads;
+            }
             processBuilder.Options |= Process.Options.RequireGlobalDependencies;
             processBuilder.RewritePolicy = RewritePolicy.DefaultSafe;
             processBuilder.EnableTempDirectory();
@@ -427,9 +460,9 @@ namespace BuildXL.FrontEnd.Ninja
                 processBuilder.AddUntrackedDirectoryScope(DirectoryArtifact.CreateWithZeroPartialSealId(m_context.PathTable, SpecialFolderUtilities.GetFolderPath(Environment.SpecialFolder.UserProfile)));
             }
 
-            // Git accesses should be ignored if .git directory is there
+            // Explicit source seals replace the legacy undeclared-read and Git-untracking policies.
             var gitDirectory = m_projectRoot.Combine(m_context.PathTable, ".git");
-            if (m_frontEndHost.Engine.DirectoryExists(gitDirectory))
+            if (m_sourceDirectories.Count == 0 && m_frontEndHost.Engine.DirectoryExists(gitDirectory))
             {
                 processBuilder.AddUntrackedDirectoryScope(DirectoryArtifact.CreateWithZeroPartialSealId(gitDirectory));
                 processBuilder.AddUntrackedFile(FileArtifact.CreateSourceFile(m_projectRoot.Combine(m_context.PathTable, ".gitattributes")));

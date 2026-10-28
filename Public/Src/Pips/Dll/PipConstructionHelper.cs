@@ -323,9 +323,10 @@ namespace BuildXL.Pips
             string description,
             string[] patterns,
             out DirectoryArtifact sealedDirectory,
-            bool scrub = false)
+            bool scrub = false,
+            SourceSealExclusions sourceExclusions = null)
         {
-            return TrySealDirectory(directoryRoot, contents, outputDirectorycontents, kind, tags, description, patterns, out sealedDirectory, out _, scrub);
+            return TrySealDirectory(directoryRoot, contents, outputDirectorycontents, kind, tags, description, patterns, out sealedDirectory, out _, scrub, sourceExclusions);
         }
 
         /// <nodoc />
@@ -339,7 +340,8 @@ namespace BuildXL.Pips
             string[] patterns,
             out DirectoryArtifact sealedDirectory,
             out SealDirectory pip,
-            bool scrub = false)
+            bool scrub = false,
+            SourceSealExclusions sourceExclusions = null)
         {
             Contract.Requires(directoryRoot.IsValid);
             Contract.Requires(contents.IsValid);
@@ -358,7 +360,8 @@ namespace BuildXL.Pips
                 CreatePipProvenance(usage),
                 ToStringIds(tags),
                 ToStringIds(patterns),
-                scrub);
+                scrub,
+                sourceExclusions);
 
             if (m_pipGraph != null)
             {

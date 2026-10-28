@@ -21,6 +21,7 @@ namespace BuildXL.FrontEnd.Ninja
         public IReadOnlyList<AbsolutePath> DirectoryExports { get; }
         public IReadOnlyList<AbsolutePath> DirectoryOutputs { get; }
         public IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> DirectoryImports { get; }
+        public IReadOnlyList<INinjaSourceDirectorySettings> SourceDirectories { get; }
 
         public NinjaProject(INinjaProjectSettings settings, PathTable pathTable)
         {
@@ -28,6 +29,7 @@ namespace BuildXL.FrontEnd.Ninja
             Root = settings.Root.IsValid ? settings.Root : settings.SpecFile.GetParent(pathTable);
             SpecFile = settings.SpecFile.IsValid ? settings.SpecFile : Root.Combine(pathTable, "build.ninja");
             Targets = settings.Targets;
+            SourceDirectories = settings.SourceDirectories ?? System.Array.Empty<INinjaSourceDirectorySettings>();
             DirectoryExports = settings.DirectoryExports ?? System.Array.Empty<AbsolutePath>();
             DirectoryOutputs = settings.DirectoryOutputs ?? System.Array.Empty<AbsolutePath>();
             DirectoryImports = settings.DirectoryImports ?? new Dictionary<string, IReadOnlyList<AbsolutePath>>();

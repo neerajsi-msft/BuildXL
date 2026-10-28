@@ -45,7 +45,7 @@ namespace BuildXL.Engine
         /// <remarks>
         /// 10: Adding top-level hash in graph fingerprint.
         /// </remarks>
-        internal const int GraphFingerprintVersion = 10;
+        internal const int GraphFingerprintVersion = 11;
 
         /// <summary>
         /// Computes a fingerprint for looking up a reloadable build graph. Null indicates failure

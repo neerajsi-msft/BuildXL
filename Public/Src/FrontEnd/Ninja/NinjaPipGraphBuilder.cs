@@ -7,6 +7,7 @@ using BuildXL.FrontEnd.Ninja.Serialization;
 using BuildXL.FrontEnd.Sdk;
 using BuildXL.FrontEnd.Workspaces.Core;
 using BuildXL.Utilities.Core;
+using BuildXL.Utilities.Configuration;
 using BuildXL.Utilities.Configuration.Resolvers;
 
 namespace BuildXL.FrontEnd.Ninja
@@ -24,7 +25,8 @@ namespace BuildXL.FrontEnd.Ninja
             AbsolutePath specPath,
             QualifierId qualifierId,
             string frontEndName,
-            NinjaPipConstructionSettings constructionSettings)
+            NinjaPipConstructionSettings constructionSettings,
+            IReadOnlyList<INinjaSourceDirectorySettings> sourceDirectories = null)
         {
             Contract.Requires(context != null);
             Contract.Requires(frontEndHost != null);
@@ -32,7 +34,8 @@ namespace BuildXL.FrontEnd.Ninja
             Contract.Requires(projectRoot.IsValid);
             Contract.Requires(specPath.IsValid);
             Contract.Requires(!string.IsNullOrEmpty(frontEndName));
-            m_pipConstructor = new NinjaPipConstructor(context, frontEndHost, frontEndName, moduleDefinition, qualifierId, projectRoot, specPath, constructionSettings);
+            m_pipConstructor = new NinjaPipConstructor(context, frontEndHost, frontEndName, moduleDefinition, qualifierId, projectRoot, specPath, constructionSettings,
+                sourceDirectories: sourceDirectories);
         }
 
 

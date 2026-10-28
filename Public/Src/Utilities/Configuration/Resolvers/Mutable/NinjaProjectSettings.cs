@@ -26,6 +26,8 @@ namespace BuildXL.Utilities.Configuration.Mutable
             DirectoryOutputs = template.DirectoryOutputs == null ? null : pathRemapper.Remap(template.DirectoryOutputs);
             DirectoryImports = template.DirectoryImports?.ToDictionary(
                 pair => pair.Key, pair => pair.Value == null ? null : (IReadOnlyList<AbsolutePath>)pathRemapper.Remap(pair.Value));
+            SourceDirectories = template.SourceDirectories?.Select(
+                source => source == null ? null : new NinjaSourceDirectorySettings(source, pathRemapper)).ToArray();
         }
 
         /// <inheritdoc />
@@ -44,5 +46,7 @@ namespace BuildXL.Utilities.Configuration.Mutable
         public IReadOnlyList<AbsolutePath> DirectoryOutputs { get; set; }
         /// <inheritdoc />
         public IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> DirectoryImports { get; set; }
+        /// <inheritdoc />
+        public IReadOnlyList<INinjaSourceDirectorySettings> SourceDirectories { get; set; }
     }
 }

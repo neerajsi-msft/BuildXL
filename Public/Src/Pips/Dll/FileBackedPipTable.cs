@@ -797,6 +797,14 @@ namespace BuildXL.Pips
         }
 
         /// <summary>Gets source seal directory patterns without hydrating the pip.</summary>
+        public SourceSealExclusions GetSourceSealDirectoryExclusions(PipId pipId)
+        {
+            var mutable = (SealDirectoryMutablePipState)GetMutable(pipId);
+            Contract.Assert(mutable.SealDirectoryKind.IsSourceSeal());
+            return mutable.SourceExclusions;
+        }
+
+        /// <summary>Gets source seal patterns without hydrating the pip.</summary>
         public ReadOnlyArray<StringId> GetSourceSealDirectoryPatterns(PipId pipId)
         {
             var mutable = GetMutable(pipId);

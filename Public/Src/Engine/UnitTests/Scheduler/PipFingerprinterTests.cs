@@ -1235,6 +1235,11 @@ namespace Test.BuildXL.Scheduler
             var isComposite = actionKind.IsComposite();
             var scrub = source.Vary(sd => sd.Scrub);
             var contentFilter = source.Vary(sd => sd.ContentFilter);
+            var sourceExclusions = source.Vary(sd => sd.SourceExclusions);
+            if (!kind.IsSourceSeal() && !sourceExclusions.IsEmpty)
+            {
+                return null;
+            }
 
             // If the resulting combination will create an invalid seal directory, create a random valid combination.
             if (kind == SealDirectoryKind.Full || kind == SealDirectoryKind.Partial)
@@ -1305,7 +1310,8 @@ namespace Test.BuildXL.Scheduler
                 PipProvenance.CreateDummy(m_context),
                 ReadOnlyArray<StringId>.From(source.Vary(sd => sd.Tags)),
                 patterns,
-                scrub);
+                scrub,
+                sourceExclusions);
 
             // The seal directory needs to be initialized
             DirectoryArtifact directoryArtifact;
@@ -1407,6 +1413,15 @@ namespace Test.BuildXL.Scheduler
                            SealDirectoryKind.SourceTopDirectoryOnly,
                            SealDirectoryKind.Opaque,
                            SealDirectoryKind.SharedOpaque),
+
+                       new FingerprintingTypeDescriptor<SourceSealExclusions>(
+                           SourceSealExclusions.Empty,
+                           new SourceSealExclusions(
+                               ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(stringTable, "private/state") }),
+                               ReadOnlyArray<PathAtom>.Empty),
+                           new SourceSealExclusions(
+                               ReadOnlyArray<RelativePath>.Empty,
+                               ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(stringTable, ".git") }))),
 
                        // File artifact arrays are special relative to other arrays due to a need for mutual-exclusion (the same file artifact cannot appear in an array with e.g. different content hashes).
                        new FingerprintingTypeDescriptor<ReadOnlyArray<FileArtifact>>(

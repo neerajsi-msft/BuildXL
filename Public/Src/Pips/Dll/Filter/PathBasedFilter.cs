@@ -88,6 +88,11 @@ namespace BuildXL.Pips.Filter
         {
             Contract.Requires(sd.Kind.IsSourceSeal());
 
+            if (m_matchMode == MatchMode.FilePath && sd.SourceExclusions.Contains(pathTable, sd.DirectoryRoot, m_path))
+            {
+                return false;
+            }
+
             if (!sd.Patterns.IsValid || sd.Patterns.Length == 0)
             {
                 // Nothing to be matched with the patterns.

@@ -956,6 +956,15 @@ interface JavaScriptCommandDependency {
 /**
  * Resolver for projects specified for the Ninja build system
  */
+interface NinjaSourceDirectory {
+    /** Recursive source seal root. Must be under a read-only mount. */
+    root: Directory;
+    /** Root-relative file/subtree exclusions, with Transformer.sealSourceDirectory semantics. */
+    excludedPaths?: RelativePath[];
+    /** Entry names excluded at any depth. Parent enumerations still observe these names. */
+    excludedNames?: PathAtom[];
+}
+
 interface NinjaProject {
     /** Unique name within the group. */
     name: string;
@@ -973,6 +982,8 @@ interface NinjaProject {
     directoryOutputs?: Path[];
     /** Producer project and exported roots. Availability is ordered; only observed member reads affect caching. */
     directoryImports?: Map<string, Path[]>;
+    /** Recursive source seals consumed by every executable node; disables legacy undeclared reads and automatic Git untracking. */
+    sourceDirectories?: NinjaSourceDirectory[];
 }
 
 interface NinjaResolver extends ResolverBase, UntrackingSettings {
@@ -990,6 +1001,8 @@ interface NinjaResolver extends ResolverBase, UntrackingSettings {
      * Cannot be combined with resolver-level root, specFile, targets or environment.
      */
     projects?: NinjaProject[];
+    /** Source seals for the single-project form; disables legacy undeclared reads and automatic Git untracking. Cannot be combined with projects. */
+    sourceDirectories?: NinjaSourceDirectory[];
 
     /**
      * High-level targets to explore

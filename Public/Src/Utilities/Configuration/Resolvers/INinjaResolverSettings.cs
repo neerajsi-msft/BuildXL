@@ -26,5 +26,8 @@ namespace BuildXL.Utilities.Configuration
         /// The build file, typically build.ninja. If null, "{ProjectRoot}/build.ninja" is used
         /// </summary>
         AbsolutePath SpecFile { get; }
+
+        /// <summary>Recursive source seals for the single-project form.</summary>
+        IReadOnlyList<INinjaSourceDirectorySettings> SourceDirectories { get; }
     }
 }

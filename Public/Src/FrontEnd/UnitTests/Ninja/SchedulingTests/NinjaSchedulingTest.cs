@@ -14,6 +14,9 @@ using Xunit;
 using BuildXL.FrontEnd.Ninja;
 using BuildXL.FrontEnd.Ninja.Serialization;
 using BuildXL.Utilities.Configuration.Resolvers;
+using BuildXL.Pips.Operations;
+using Test.BuildXL.FrontEnd.Core;
+using static Test.BuildXL.TestUtilities.TestEnv;
 
 namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
 {
@@ -22,6 +25,61 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
         public NinjaSchedulingTest(ITestOutputHelper output)
             : base(output)
         {
+        }
+
+        [Fact]
+        public void SourceSealsCarryExclusionsAndAreSharedByProjectProcesses()
+        {
+            var sourceRoot = TestPath.Combine(PathTable, "sources");
+            var settings = new NinjaResolverSettings
+            {
+                SourceDirectories = new[] { new NinjaSourceDirectorySettings
+                {
+                    Root = sourceRoot,
+                    ExcludedPaths = new[] { RelativePath.Create(PathTable.StringTable, "private/state") },
+                    ExcludedNames = new[] { PathAtom.Create(PathTable.StringTable, ".git") },
+                } },
+            };
+            var first = CreateNinjaNode(outputs: Paths("one.out"));
+            var second = CreateNinjaNode(outputs: Paths("two.out"));
+            var result = Start(settings).AddAll(first, second).ScheduleAll().AssertSuccess();
+            var seal = Assert.Single(Assert.IsType<TestPipGraph>(result.PipGraph)
+                .RetrieveScheduledPips().OfType<SealDirectory>());
+
+            Assert.Equal(SealDirectoryKind.SourceAllDirectories, seal.Kind);
+            Assert.Single(seal.SourceExclusions.Paths);
+            Assert.Single(seal.SourceExclusions.Names);
+            Assert.Contains(result.RetrieveSuccessfulProcess(first).DirectoryDependencies, directory => directory.Path == sourceRoot);
+            Assert.Contains(result.RetrieveSuccessfulProcess(second).DirectoryDependencies, directory => directory.Path == sourceRoot);
+            Assert.False(result.RetrieveSuccessfulProcess(first).AllowUndeclaredSourceReads);
+            Assert.False(result.RetrieveSuccessfulProcess(second).AllowUndeclaredSourceReads);
+
+            var remappedPaths = new PathTable();
+            var remapped = new NinjaResolverSettings(settings, new PathRemapper(PathTable, remappedPaths));
+            var source = Assert.Single(remapped.SourceDirectories);
+            Assert.Equal(sourceRoot.ToString(PathTable), source.Root.ToString(remappedPaths));
+            Assert.Equal("private/state", Assert.Single(source.ExcludedPaths).ToString(remappedPaths.StringTable).Replace('\\', '/'));
+            Assert.Equal(".git", Assert.Single(source.ExcludedNames).ToString(remappedPaths.StringTable));
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void SourceSealsReplaceLegacyGitUntracking(bool useSourceSeal)
+        {
+            var git = TestPath.Combine(PathTable, ".git");
+            FileSystem.CreateDirectory(git);
+            var settings = new NinjaResolverSettings
+            {
+                SourceDirectories = useSourceSeal
+                    ? new[] { new NinjaSourceDirectorySettings { Root = TestPath } }
+                    : null,
+            };
+            var node = CreateNinjaNode(outputs: Paths("one.out"));
+            var process = Start(settings).Add(node).ScheduleAll().AssertSuccess().RetrieveSuccessfulProcess(node);
+
+            Assert.Equal(!useSourceSeal, process.AllowUndeclaredSourceReads);
+            Assert.Equal(!useSourceSeal, process.UntrackedScopes.Contains(git));
         }
 
         [Fact]

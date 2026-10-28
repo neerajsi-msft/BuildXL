@@ -25,6 +25,8 @@ namespace BuildXL.Utilities.Configuration.Mutable
         public NinjaResolverSettings(INinjaResolverSettings template, PathRemapper pathRemapper) : base(template, template, pathRemapper)
         {
             Targets = template.Targets;
+            SourceDirectories = template.SourceDirectories?.Select(
+                source => source == null ? null : new NinjaSourceDirectorySettings(source, pathRemapper)).ToArray();
             Projects = template.Projects?.Select(project => project == null ? null : new NinjaProjectSettings(project, pathRemapper)).ToList();
             Root = pathRemapper.Remap(template.Root);
             ModuleName = template.ModuleName;
@@ -44,6 +46,8 @@ namespace BuildXL.Utilities.Configuration.Mutable
 
         /// <inheritdoc />
         public IReadOnlyList<INinjaProjectSettings> Projects { get; set; }
+        /// <inheritdoc />
+        public IReadOnlyList<INinjaSourceDirectorySettings> SourceDirectories { get; set; }
 
         /// <summary>
         /// Root of the project. Typically, where the build.ninja file is located

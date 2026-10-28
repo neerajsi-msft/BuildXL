@@ -293,6 +293,13 @@ namespace BuildXL.Pips.Graph
             fingerprinter.AddCollection<DirectoryArtifact, IReadOnlyList<DirectoryArtifact>>(nameof(SealDirectory.OutputDirectoryContents), sealDirectory.OutputDirectoryContents, (fp, d) => AddDirectoryDependency(fp, d));
             fingerprinter.AddCollection<FileArtifact, ReadOnlyArray<FileArtifact>>(nameof(SealDirectory.Contents), sortedContents, (fp, f) => AddFileDependency(fp, f));
             fingerprinter.AddCollection<StringId, ReadOnlyArray<StringId>>(nameof(SealDirectory.Patterns), sealDirectory.Patterns, (fp, p) => fp.Add(p));
+            if (!sealDirectory.SourceExclusions.IsEmpty)
+            {
+                fingerprinter.AddCollection<RelativePath, ReadOnlyArray<RelativePath>>(
+                    "ExcludedPaths", sealDirectory.SourceExclusions.Paths, (fp, p) => fp.Add(p.ToString(m_pathTable.StringTable)));
+                fingerprinter.AddCollection<PathAtom, ReadOnlyArray<PathAtom>>(
+                    "ExcludedNames", sealDirectory.SourceExclusions.Names, (fp, p) => fp.Add(p.StringId));
+            }
             fingerprinter.Add(nameof(SealDirectory.CompositionActionKind), sealDirectory.CompositionActionKind.ToString());
             fingerprinter.Add(nameof(SealDirectory.ContentFilter), sealDirectory.ContentFilter.HasValue ? $"{sealDirectory.ContentFilter.Value.Kind} {sealDirectory.ContentFilter.Value.Regex}" : "");
             fingerprinter.AddCollection<DirectoryArtifact, IReadOnlyList<DirectoryArtifact>>(nameof(SealDirectory.ComposedDirectories), sealDirectory.ComposedDirectories, (fp, d) => AddDirectoryDependency(fp, d));

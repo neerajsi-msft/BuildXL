@@ -464,11 +464,12 @@ namespace Test.BuildXL.Scheduler
                 return default(SortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>);
             }
 
-            public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns)
+            public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions)
             {
                 Contract.Requires(directoryArtifact.IsValid);
                 allDirectories = false;
                 patterns = ReadOnlyArray<StringId>.Empty;
+                exclusions = SourceSealExclusions.Empty;
                 return false;
             }
 
@@ -603,9 +604,9 @@ namespace Test.BuildXL.Scheduler
             {
                 sourceSealWithPatterns = default;
 
-                if (IsSourceSealedDirectory(directory, out bool allDirectories, out ReadOnlyArray<StringId> patterns))
+                if (IsSourceSealedDirectory(directory, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out var exclusions))
                 {
-                    sourceSealWithPatterns = new SourceSealWithPatterns(directory.Path, patterns, !allDirectories);
+                    sourceSealWithPatterns = new SourceSealWithPatterns(directory.Path, patterns, !allDirectories, exclusions);
                     return true;
                 }
 

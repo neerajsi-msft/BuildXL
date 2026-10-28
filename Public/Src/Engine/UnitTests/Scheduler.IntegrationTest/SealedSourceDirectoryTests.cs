@@ -5,6 +5,7 @@ using System.IO;
 using BuildXL.Pips.Operations;
 using BuildXL.Scheduler.Tracing;
 using BuildXL.Utilities.Core;
+using BuildXL.Utilities.Collections;
 using Test.BuildXL.Executables.TestProcess;
 using Test.BuildXL.Scheduler;
 using Test.BuildXL.TestUtilities;
@@ -20,6 +21,157 @@ namespace IntegrationTest.BuildXL.Scheduler
     {
         public SealedSourceDirectoryTests(ITestOutputHelper output) : base(output)
         {
+        }
+
+        [Theory]
+        [InlineData(".git/config", false)]
+        [InlineData("nested/.git/config", false)]
+        [InlineData("private/state", false)]
+        [InlineData(".git/config", true)]
+        public void ExcludedReadsRequireAnotherInputGrant(string relativePath, bool explicitlyDeclared)
+        {
+            Configuration.Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = false;
+            var source = CreateSourceFile(Path.Combine(SourceRoot, relativePath));
+            var builder = CreatePipBuilder(new[]
+            {
+                Operation.ReadFile(source, doNotInfer: !explicitlyDeclared),
+                Operation.WriteFile(CreateOutputFileArtifact()),
+            });
+            builder.AddInputDirectory(SealWithExclusions());
+            var pip = SchedulePipBuilder(builder).Process;
+
+            if (explicitlyDeclared)
+            {
+                RunScheduler().AssertCacheMiss(pip.PipId);
+                RunScheduler().AssertCacheHit(pip.PipId);
+            }
+            else
+            {
+                AssertExcludedAccessFails();
+            }
+        }
+
+        [TheoryIfSupported(requiresEBPFEnabled: true)]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public void ExactExcludedStatHonorsProbeSetting(bool isDirectory, bool treatStatAsProbe)
+        {
+            Configuration.Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = treatStatAsProbe;
+            var target = SourceRootPath.Combine(Context.PathTable, ".git");
+            if (isDirectory)
+            {
+                Directory.CreateDirectory(target.ToString(Context.PathTable));
+            }
+            else
+            {
+                CreateSourceFile(target.ToString(Context.PathTable));
+            }
+
+            var builder = CreatePipBuilder(new[]
+            {
+                Operation.SpawnExe(Context.PathTable,
+                    FileArtifact.CreateSourceFile(AbsolutePath.Create(Context.PathTable, "/usr/bin/stat")),
+                    arguments: target.ToString(Context.PathTable)),
+                Operation.WriteFile(CreateOutputFileArtifact()),
+            });
+            builder.AddInputDirectory(SealWithExclusions());
+            var pip = SchedulePipBuilder(builder).Process;
+
+            if (treatStatAsProbe)
+            {
+                RunScheduler().AssertCacheMiss(pip.PipId);
+                RunScheduler().AssertCacheHit(pip.PipId);
+            }
+            else
+            {
+                AssertExcludedAccessFails();
+            }
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ProbesBelowExcludedEntryFailEvenWhenAbsent(bool exists)
+        {
+            Configuration.Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = true;
+            var target = SourceRootPath.Combine(Context.PathTable, RelativePath.Create(Context.StringTable, ".git/config"));
+            if (exists)
+            {
+                CreateSourceFile(target.ToString(Context.PathTable));
+            }
+
+            var builder = CreatePipBuilder(new[]
+            {
+                Operation.Probe(FileArtifact.CreateSourceFile(target), doNotInfer: true),
+                Operation.WriteFile(CreateOutputFileArtifact()),
+            });
+            builder.AddInputDirectory(SealWithExclusions());
+            SchedulePipBuilder(builder);
+            AssertExcludedAccessFails();
+        }
+
+        [Fact]
+        public void ExcludedDirectoryCannotBeEnumerated()
+        {
+            Configuration.Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = true;
+            var directory = DirectoryArtifact.CreateWithZeroPartialSealId(SourceRootPath.Combine(Context.PathTable, ".git"));
+            Directory.CreateDirectory(directory.Path.ToString(Context.PathTable));
+            var builder = CreatePipBuilder(new[]
+            {
+                Operation.EnumerateDir(directory, doNotInfer: true),
+                Operation.WriteFile(CreateOutputFileArtifact()),
+            });
+            builder.AddInputDirectory(SealWithExclusions());
+            SchedulePipBuilder(builder);
+            AssertExcludedAccessFails();
+        }
+
+        [Fact]
+        public void ParentEnumerationTracksExcludedNameButNotItsContents()
+        {
+            Configuration.Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = true;
+            var root = DirectoryArtifact.CreateWithZeroPartialSealId(SourceRootPath);
+            var builder = CreatePipBuilder(new[]
+            {
+                Operation.EnumerateDir(root, doNotInfer: true),
+                Operation.WriteFile(CreateOutputFileArtifact()),
+            });
+            builder.AddInputDirectory(SealWithExclusions());
+            var pip = SchedulePipBuilder(builder).Process;
+            RunScheduler().AssertCacheMiss(pip.PipId);
+            RunScheduler().AssertCacheHit(pip.PipId);
+
+            var metadata = CreateSourceFile(Path.Combine(SourceRoot, ".git", "config"));
+            RunScheduler().AssertCacheMiss(pip.PipId);
+            WriteSourceFile(metadata);
+            RunScheduler().AssertCacheHit(pip.PipId);
+            Directory.Delete(Path.Combine(SourceRoot, ".git"), recursive: true);
+            RunScheduler().AssertCacheHit(pip.PipId);
+        }
+
+        private DirectoryArtifact SealWithExclusions()
+        {
+            var seal = new SealDirectory(
+                SourceRootPath,
+                CollectionUtilities.EmptySortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>(OrdinalFileArtifactComparer.Instance),
+                CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                SealDirectoryKind.SourceAllDirectories, CreateProvenance(),
+                ReadOnlyArray<StringId>.Empty, ReadOnlyArray<StringId>.Empty,
+                sourceExclusions: new SourceSealExclusions(
+                    ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(Context.StringTable, "private/state") }),
+                    ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(Context.StringTable, ".git") })));
+            return PipGraphBuilder.AddSealDirectory(seal);
+        }
+
+        private void AssertExcludedAccessFails()
+        {
+            RunScheduler().AssertFailure();
+            AssertVerboseEventLogged(ProcessesLogEventId.PipProcessDisallowedFileAccess, allowMore: true);
+            AssertVerboseEventLogged(LogEventId.DependencyViolationMissingSourceDependency, allowMore: true);
+            AssertWarningEventLogged(LogEventId.ProcessNotStoredToCacheDueToFileMonitoringViolations);
+            AssertErrorEventLogged(LogEventId.FileMonitoringError);
         }
 
         [Theory]

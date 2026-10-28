@@ -35,5 +35,8 @@ namespace BuildXL.Utilities.Configuration
 
         /// <summary>Producer project names and exported directory roots consumed by every process in this project.</summary>
         IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>> DirectoryImports { get; }
+
+        /// <summary>Recursive source seals consumed by every process in this project.</summary>
+        IReadOnlyList<INinjaSourceDirectorySettings> SourceDirectories { get; }
     }
 }

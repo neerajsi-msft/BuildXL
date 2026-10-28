@@ -6039,15 +6039,18 @@ namespace BuildXL.Scheduler
         bool IPipExecutionEnvironment.IsSourceSealedDirectory(
             DirectoryArtifact directoryArtifact,
             out bool allDirectories,
-            out ReadOnlyArray<StringId> pattern)
+            out ReadOnlyArray<StringId> pattern,
+            out SourceSealExclusions exclusions)
         {
             Contract.Requires(directoryArtifact.IsValid);
             pattern = ReadOnlyArray<StringId>.Empty;
+            exclusions = SourceSealExclusions.Empty;
             var sealDirectoryKind = GetSealDirectoryKind(directoryArtifact);
 
             if (sealDirectoryKind.IsSourceSeal())
             {
                 pattern = GetSourceSealDirectoryPatterns(directoryArtifact);
+                exclusions = PipGraph.PipTable.GetSourceSealDirectoryExclusions(PipGraph.GetSealedDirectoryNode(directoryArtifact).ToPipId());
             }
 
             switch (sealDirectoryKind)
@@ -7050,9 +7053,9 @@ namespace BuildXL.Scheduler
         {
             sourceSealWithPatterns = default;
 
-            if (((IPipExecutionEnvironment)this).IsSourceSealedDirectory(directory, out bool allDirectories, out ReadOnlyArray<StringId> patterns))
+            if (((IPipExecutionEnvironment)this).IsSourceSealedDirectory(directory, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out var exclusions))
             {
-                sourceSealWithPatterns = new SourceSealWithPatterns(directory.Path, patterns, !allDirectories);
+                sourceSealWithPatterns = new SourceSealWithPatterns(directory.Path, patterns, !allDirectories, exclusions);
                 return true;
             }
 

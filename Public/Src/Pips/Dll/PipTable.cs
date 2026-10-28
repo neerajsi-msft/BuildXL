@@ -33,7 +33,7 @@ namespace BuildXL.Pips
         /// <summary>
         /// Envelope for serialization
         /// </summary>
-        public static readonly FileEnvelope FileEnvelope = new FileEnvelope(name: "PipTable", version: 1);
+        public static readonly FileEnvelope FileEnvelope = new FileEnvelope(name: "PipTable", version: 2);
 
         private sealed class PageablePipStore : PageableStore
         {
@@ -528,6 +528,15 @@ namespace BuildXL.Pips
         /// <summary>
         /// Get seal directory kind without the need to hydrate the pip
         /// </summary>
+        public SourceSealExclusions GetSourceSealDirectoryExclusions(PipId pipId)
+        {
+            Contract.Requires(IsValid(pipId));
+            var mutable = (SealDirectoryMutablePipState)m_mutables[pipId.Value];
+            Contract.Assert(mutable.SealDirectoryKind.IsSourceSeal());
+            return mutable.SourceExclusions;
+        }
+
+        /// <summary>Gets source seal patterns without hydrating the pip.</summary>
         public ReadOnlyArray<StringId> GetSourceSealDirectoryPatterns(PipId pipId)
         {
             Contract.Requires(IsValid(pipId));
