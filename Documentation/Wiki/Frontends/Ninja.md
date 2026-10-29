@@ -105,6 +105,12 @@ producers and cycles fail graph construction rather than permitting SDK
 multiwrites. Ordinary source inputs continue to use sandbox-observed reads
 for incremental dependency tracking.
 
+Each project's pip identity uses its own name and Ninja entry point relative to
+its root, not the first project's entry point. Inserting or reordering unrelated
+projects therefore preserves existing pip identities and generated temporary
+directory paths. Changes within a project's selected graph can still change its
+pip identities.
+
 Projects can also export static output directories and import them by producer
 name and root:
 

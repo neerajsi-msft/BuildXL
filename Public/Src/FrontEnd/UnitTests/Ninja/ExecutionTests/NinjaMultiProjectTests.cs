@@ -144,6 +144,54 @@ default ../out/result.txt
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
+        public void IndependentProjectInsertionPreservesExistingPipIdentities(bool prepend)
+        {
+            var config = CreateConfiguration();
+            ((CommandLineConfiguration)config).Cache.CacheGraph = false;
+            ((CommandLineConfiguration)config).Cache.AllowFetchingCachedGraphFromContentCache = false;
+            var cache = new TestCache();
+            var first = RunEngineWithConfig(config, cache);
+            Assert.True(first.IsSuccess);
+            var before = first.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>()
+                .ToDictionary(process => process.FileOutputs[0].Path,
+                    process => (process.SemiStableHash, process.TempDirectory));
+            Assert.Equal(2, before.Count);
+
+            var configPath = config.Startup.ConfigFile.ToString(PathTable);
+            var configuration = File.ReadAllText(configPath);
+            const string project = @"
+            {
+                name: 'independent',
+                root: d`independent`,
+                specFile: f`independent/unrelated.ninja`,
+                environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
+            },";
+            configuration = prepend
+                ? configuration.Replace("projects: [", "projects: [" + project)
+                : configuration.Replace("        ],", project + "\n        ],");
+            Directory.CreateDirectory(Path.Combine(SourceRoot, "independent"));
+            File.WriteAllText(Path.Combine(SourceRoot, "independent", "unrelated.ninja"),
+                "rule independent\n  command = printf unrelated > $out\nbuild result.txt: independent\ndefault result.txt\n");
+            File.WriteAllText(configPath, configuration);
+
+            var second = RunEngineWithConfig(config, cache);
+            Assert.True(second.IsSuccess);
+            Assert.Equal(2, second.EnginePerformanceInfo.SchedulerPerformanceInfo.ProcessPipCacheHits);
+            Assert.Equal(1, second.EnginePerformanceInfo.SchedulerPerformanceInfo.ProcessPipCacheMisses);
+            var processes = second.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>().ToList();
+            Assert.Equal(3, processes.Count);
+            foreach (var entry in before)
+            {
+                var process = processes.Single(candidate => candidate.FileOutputs[0].Path == entry.Key);
+                Assert.True(process.TempDirectory.IsValid);
+                Assert.Equal(entry.Value.SemiStableHash, process.SemiStableHash);
+                Assert.Equal(entry.Value.TempDirectory, process.TempDirectory);
+            }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
         public void RejectsAmbiguousOrCyclicGroups(bool cycle)
         {
             var config = CreateConfiguration();

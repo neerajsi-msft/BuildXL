@@ -142,18 +142,15 @@ namespace BuildXL.FrontEnd.Ninja
             }
             var fullSymbol = FullSymbol.Create(m_context.SymbolTable, symbolName);
             AbsolutePath pathToSpec = moduleDefinition.Specs.First();
-            if (projectName != null)
-            {
-                // The group owns one synthetic spec; individual Ninja files are tracked during graph extraction.
-                projectRoot = moduleDefinition.Root;
-            }
-            if (!projectRoot.TryGetRelative(m_context.PathTable, pathToSpec, out var specRelativePath))
+            // The group's synthetic spec follows its first project, so it must not seed other projects' identities.
+            AbsolutePath identitySpec = projectName == null ? pathToSpec : m_specPath;
+            if (!projectRoot.TryGetRelative(m_context.PathTable, identitySpec, out var specRelativePath))
             {
                 // Issue a warning and continue with Invalid path. PipConstructionHelper will just ignore
                 Tracing.Logger.Log.CouldNotComputeRelativePathToSpec(m_context.LoggingContext,
                     Location.FromFile(projectRoot.ToString(m_context.PathTable)),
                     projectRoot.ToString(m_context.PathTable),
-                    pathToSpec.ToString(m_context.PathTable));
+                    identitySpec.ToString(m_context.PathTable));
                 specRelativePath = RelativePath.Invalid;
             }
 
