@@ -9,16 +9,22 @@ using BuildXL.Utilities.Core;
 
 namespace BuildXL.FrontEnd.Ninja
 {
-    /// <summary>Validates output ownership and sorts the union of the imported graphs.</summary>
-    internal static class NinjaGraphStitcher
+    /// <summary>Validated bindings and dependency order for the union of the imported graphs.</summary>
+    internal sealed class NinjaGraphStitcher
     {
-        public static bool TrySort(
+        public IReadOnlyList<(NinjaNode Node, NinjaProject Project)> Nodes { get; private init; }
+        public IReadOnlyDictionary<(string, AbsolutePath), AbsolutePath[]> DirectoryMembers { get; private init; }
+        public IReadOnlyDictionary<NinjaProject, IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>>> DirectoryImports { get; private init; }
+
+        private NinjaGraphStitcher() { }
+
+        public static bool TryStitch(
             IReadOnlyList<NinjaProject> projects,
             PathTable pathTable,
-            out IReadOnlyList<NinjaNode> sortedNodes,
+            out NinjaGraphStitcher graph,
             out string error)
         {
-            sortedNodes = null;
+            graph = null;
             error = null;
             var owners = new Dictionary<NinjaNode, NinjaProject>();
             var producers = new Dictionary<AbsolutePath, NinjaNode>();
@@ -68,6 +74,7 @@ namespace BuildXL.FrontEnd.Ninja
                 }
             }
 
+            var directoryMembers = new Dictionary<(string, AbsolutePath), AbsolutePath[]>();
             foreach (var project in projects)
             {
                 foreach (var root in project.DirectoryExports)
@@ -95,14 +102,17 @@ namespace BuildXL.FrontEnd.Ninja
                     }
 
                     exports.Add((project.Name, root), members.Select(pair => pair.Value).ToHashSet());
+                    directoryMembers.Add((project.Name, root), members.Select(pair => pair.Key).ToArray());
                 }
             }
 
             var directoryDependencies = new Dictionary<NinjaProject, HashSet<NinjaNode>>();
+            var directoryImports = new Dictionary<NinjaProject, IReadOnlyDictionary<string, IReadOnlyList<AbsolutePath>>>();
             var projectsByName = projects.ToDictionary(project => project.Name, StringComparer.OrdinalIgnoreCase);
             foreach (var project in projects)
             {
                 var required = new HashSet<NinjaNode>();
+                var imports = new Dictionary<string, IReadOnlyList<AbsolutePath>>();
                 if (project.DirectoryImports.Keys.Distinct(StringComparer.OrdinalIgnoreCase).Count() != project.DirectoryImports.Count)
                 {
                     error = $"Project '{project.Name}' has duplicate directory-import producer names.";
@@ -117,9 +127,10 @@ namespace BuildXL.FrontEnd.Ninja
                         return false;
                     }
 
+                    bool producerFound = projectsByName.TryGetValue(import.Key, out var producerProject);
                     foreach (var root in import.Value)
                     {
-                        if (!root.IsValid || !projectsByName.TryGetValue(import.Key, out var producerProject)
+                        if (!root.IsValid || !producerFound
                             || producerProject == project || !exports.TryGetValue((producerProject.Name, root), out var members))
                         {
                             error = $"Project '{project.Name}' imports missing, unknown, or self-owned directory '{(root.IsValid ? root.ToString(pathTable) : "<invalid>")}' from project '{import.Key}'.";
@@ -128,9 +139,12 @@ namespace BuildXL.FrontEnd.Ninja
 
                         required.UnionWith(members);
                     }
+
+                    imports.Add(producerProject.Name, import.Value);
                 }
 
                 directoryDependencies.Add(project, required);
+                directoryImports.Add(project, imports);
             }
 
             var indegrees = new Dictionary<NinjaNode, int>();
@@ -176,7 +190,12 @@ namespace BuildXL.FrontEnd.Ninja
                 return false;
             }
 
-            sortedNodes = result;
+            graph = new NinjaGraphStitcher
+            {
+                Nodes = result.Select(node => (node, owners[node])).ToArray(),
+                DirectoryMembers = directoryMembers,
+                DirectoryImports = directoryImports,
+            };
             return true;
         }
     }

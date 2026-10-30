@@ -82,6 +82,27 @@ default final.txt
         }
 
         [Fact]
+        public void StitchesActionsThatInterleaveProjects()
+        {
+            var config = CreateConfiguration();
+            File.AppendAllText(Path.Combine(SourceRoot, "producer", "build.ninja"), @"
+rule finish
+  command = cat ../consumer/final.txt > $out
+build final.txt: finish ../consumer/final.txt
+default ../sdk/shared.txt final.txt
+");
+
+            var result = RunEngineWithConfig(config);
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal("consumer:unset:consumer-local:producer:producer-local",
+                File.ReadAllText(Path.Combine(SourceRoot, "producer", "final.txt")));
+            var processes = result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>().ToList();
+            Assert.Equal(3, processes.Count);
+            Assert.Equal(2, processes.Sum(process => process.Dependencies.Count(file => file.IsOutputFile)));
+        }
+
+        [Fact]
         public void BuildsWithReadonlyProjectRootAndSeparateOutputs()
         {
             var config = Build()
@@ -341,6 +362,39 @@ default ../out/result.txt
                 file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "shared.txt");
             Assert.DoesNotContain(consumer.Dependencies, file =>
                 file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "dynamic.txt");
+        }
+
+        [Fact]
+        public void SharedRootImportsSelectTheNamedProducerArtifact()
+        {
+            var config = CreateDirectoryConfiguration();
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(path, File.ReadAllText(path)
+                .Replace("directoryExports:", "directoryOutputs:")
+                .Replace("projects: [", @"projects: [{
+                    name: 'other', root: d`other`, directoryOutputs: [p`sdk`],
+                    environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
+                },"));
+            Directory.CreateDirectory(Path.Combine(SourceRoot, "other"));
+            File.WriteAllText(Path.Combine(SourceRoot, "other", "build.ninja"),
+                "rule produce\n  command = mkdir -p ../sdk && printf other > ../sdk/other.txt && touch $out\n" +
+                "build done: produce\ndefault done\n");
+            File.WriteAllText(Path.Combine(SourceRoot, "producer", "build.ninja"),
+                "rule produce\n  command = mkdir -p ../sdk && printf 'producer:' > ../sdk/shared.txt && " +
+                "cat local.txt >> ../sdk/shared.txt && touch $out\n" +
+                "build producer.done: produce local.txt\ndefault producer.done\n");
+
+            var result = RunEngineWithConfig(config);
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal("producer:producer-local", File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+            var processes = result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>().ToList();
+            var consumer = processes.Single(process => process.DirectoryDependencies.Length != 0);
+            var producer = processes.Single(process => process.FileOutputs.Any(file =>
+                file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "producer.done"));
+            var imported = Assert.Single(consumer.DirectoryDependencies);
+            Assert.Contains(imported, producer.DirectoryOutputs);
+            Assert.DoesNotContain(imported, processes.Single(process => process != consumer && process != producer).DirectoryOutputs);
         }
 
         [Fact]

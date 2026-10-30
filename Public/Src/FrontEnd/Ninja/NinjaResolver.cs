@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using System;
 using System.Collections.Generic;
 using System.Diagnostics.ContractsLight;
 using System.Linq;
@@ -87,14 +86,14 @@ namespace BuildXL.FrontEnd.Ninja
             // TODO: Actual filtering. For now [first development only] we schedule all pips because we are dealing with a single spec 'all'
             IReadOnlyCollection<NinjaNode> filteredNodes = result.Graph.Nodes;
 
-            var graphConstructor = new NinjaPipGraphBuilder(
+            var constructor = new NinjaPipConstructor(
                 m_context,
                 m_host,
+                m_frontEndName,
                 ModuleDef,
+                qualifierId,
                 m_ninjaWorkspaceResolver.ProjectRoot,
                 m_ninjaWorkspaceResolver.SpecFile,
-                qualifierId,
-                m_frontEndName,
                 new()
                 {
                     UserDefinedEnvironment = m_ninjaWorkspaceResolver.TrackedEnvironmentVariables,
@@ -102,34 +101,26 @@ namespace BuildXL.FrontEnd.Ninja
                     UntrackingSettings = m_ninjaResolverSettings,
                     AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
                     AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
-                }, m_ninjaResolverSettings.SourceDirectories);
+                }, sourceDirectories: m_ninjaResolverSettings.SourceDirectories);
 
-            return graphConstructor.TrySchedulePips(filteredNodes, qualifierId);
+            return filteredNodes.All(node => constructor.TrySchedulePip(node, out _));
         }
 
         private bool TryEvaluateProjects(ModuleDefinition module, QualifierId qualifierId)
         {
             var projects = m_ninjaWorkspaceResolver.Projects;
-            if (!NinjaGraphStitcher.TrySort(projects, m_context.PathTable, out var nodes, out var error))
+            if (!NinjaGraphStitcher.TryStitch(projects, m_context.PathTable, out var graph, out var error))
             {
                 Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
                     m_ninjaResolverSettings.Location(m_context.PathTable), error);
                 return false;
             }
 
-            var sharedState = new NinjaPipConstructor.SharedState();
-            var projectNames = projects.ToDictionary(project => project.Name, project => project.Name, StringComparer.OrdinalIgnoreCase);
-            var constructors = new Dictionary<NinjaNode, NinjaPipConstructor>();
+            var sharedState = new NinjaPipConstructor.SharedState { DirectoryMembers = graph.DirectoryMembers };
+            var constructors = new Dictionary<NinjaProject, NinjaPipConstructor>();
             foreach (var project in projects)
             {
-                foreach (var root in project.DirectoryExports)
-                {
-                    sharedState.DirectoryMembers.Add((project.Name, root), project.Nodes
-                        .Where(node => node.Rule != "phony").SelectMany(node => node.Outputs)
-                        .Where(path => path.IsWithin(m_context.PathTable, root)).Distinct().ToArray());
-                }
-
-                var constructor = new NinjaPipConstructor(
+                constructors.Add(project, new NinjaPipConstructor(
                     m_context, m_host, m_frontEndName, module, qualifierId, project.Root, project.SpecFile,
                     new NinjaPipConstructionSettings
                     {
@@ -138,17 +129,12 @@ namespace BuildXL.FrontEnd.Ninja
                         UntrackingSettings = m_ninjaResolverSettings,
                         AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
                         AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
-                    }, sharedState, project.Name, project.DirectoryImports.ToDictionary(
-                        import => projectNames[import.Key], import => import.Value), project.DirectoryOutputs, project.SourceDirectories);
-                foreach (var node in project.Nodes)
-                {
-                    constructors.Add(node, constructor);
-                }
+                    }, sharedState, project.Name, graph.DirectoryImports[project], project.DirectoryOutputs, project.SourceDirectories));
             }
 
-            foreach (var node in nodes)
+            foreach (var (node, project) in graph.Nodes)
             {
-                if (!constructors[node].TrySchedulePip(node, qualifierId, out _))
+                if (!constructors[project].TrySchedulePip(node, out _))
                 {
                     Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
                         m_ninjaResolverSettings.Location(m_context.PathTable),

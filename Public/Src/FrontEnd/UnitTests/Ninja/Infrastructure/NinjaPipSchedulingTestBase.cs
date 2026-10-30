@@ -153,7 +153,7 @@ namespace Test.BuildXL.FrontEnd.Ninja.Infrastructure
 
                 foreach (var node in nodes)
                 {
-                    var result = pipConstructor.TrySchedulePip(node, qualifierId, out Process process);
+                    var result = pipConstructor.TrySchedulePip(node, out Process process);
                     schedulingResults[node] = (result, process);
                 }
 

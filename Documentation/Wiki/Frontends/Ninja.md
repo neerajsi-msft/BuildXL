@@ -188,3 +188,13 @@ upstream generated configuration may still need staged generation.
 In the Examples folder in this repository you can find:
 - an example [plain Ninja project](../../../Examples/NinjaHelloWorld/). that you can build following the [instructions](../../../Examples/NinjaHelloWorld/README.md)
 - an example [CMake project](../../../Examples/CMakeNinjaHelloWorld) to be build with the Ninja resolver following [these instructions](../../../Examples/CMakeNinjaHelloWorld/README.md).
+
+## Appendix: Unvetted implementation notes
+
+- `NinjaGraphStitcher.TryStitch` validates the combined graph and returns action-level
+  dependency order, project ownership, canonical directory imports and static export membership.
+- `NinjaResolver` passes these bindings to per-project `NinjaPipConstructor` instances
+  sharing produced artifacts. BuildXL adds execution edges from the supplied artifacts;
+  producers must be constructed before consumers, even when actions interleave projects.
+- Static partial exports, dynamic shared-opaque outputs, source seals and the legacy
+  single-project configuration remain supported.

@@ -175,9 +175,45 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
             var producer = CreateNinjaNode(rule: "producer", outputs: Paths("header.h"));
             var consumer = CreateNinjaNode(rule: "consumer", inputs: Paths("header.h"), outputs: Paths("consumer.o"));
 
-            Assert.True(NinjaGraphStitcher.TrySort(new[] { Project("consumer", consumer), Project("producer", producer) },
-                PathTable, out var sorted, out var error), error);
-            Assert.Equal(new[] { producer, consumer }, sorted);
+            var producerProject = Project("producer", producer);
+            var consumerProject = Project("consumer", consumer);
+            Assert.True(NinjaGraphStitcher.TryStitch(new[] { consumerProject, producerProject },
+                PathTable, out var graph, out var error), error);
+            Assert.Equal(new[] { (producer, producerProject), (consumer, consumerProject) }, graph.Nodes);
+        }
+
+        [Fact]
+        public void StitchingRetainsValidatedDirectoryBindings()
+        {
+            var root = TestPath.Combine(PathTable, "sdk");
+            var first = CreateNinjaNode(outputs: new[] { root.Combine(PathTable, "first.h") }.ToReadOnlySet());
+            var second = CreateNinjaNode(outputs: new[] { root.Combine(PathTable, "second.h") }.ToReadOnlySet());
+            var consumer = CreateNinjaNode(outputs: Paths("consumer.o"));
+            var producerProject = new NinjaProject(new NinjaProjectSettings
+            {
+                Name = "producer",
+                Root = TestPath,
+                Environment = new Dictionary<string, EnvironmentData>(),
+                DirectoryExports = new[] { root },
+            }, PathTable) { Nodes = new[] { first, second } };
+            var consumerProject = new NinjaProject(new NinjaProjectSettings
+            {
+                Name = "consumer",
+                Root = TestPath,
+                Environment = new Dictionary<string, EnvironmentData>(),
+                DirectoryImports = new Dictionary<string, IReadOnlyList<AbsolutePath>>
+                {
+                    ["PrOdUcEr"] = new[] { root },
+                },
+            }, PathTable) { Nodes = new[] { consumer } };
+
+            Assert.True(NinjaGraphStitcher.TryStitch(new[] { consumerProject, producerProject },
+                PathTable, out var graph, out var error), error);
+            Assert.Equal(new[] { (first, producerProject), (second, producerProject), (consumer, consumerProject) }, graph.Nodes);
+            Assert.Equal(new[] { root }, graph.DirectoryImports[consumerProject]["producer"]);
+            Assert.Empty(graph.DirectoryImports[producerProject]);
+            Assert.Equal(first.Outputs.Concat(second.Outputs).OrderBy(path => path.RawValue),
+                graph.DirectoryMembers[("producer", root)].OrderBy(path => path.RawValue));
         }
 
         [Fact]
@@ -186,7 +222,7 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
             var first = CreateNinjaNode(rule: "first", outputs: Paths("header.h"));
             var second = CreateNinjaNode(rule: "second", outputs: Paths("header.h"));
 
-            Assert.False(NinjaGraphStitcher.TrySort(new[] { Project("first-project", first), Project("second-project", second) },
+            Assert.False(NinjaGraphStitcher.TryStitch(new[] { Project("first-project", first), Project("second-project", second) },
                 PathTable, out _, out var error));
             Assert.Contains("Duplicate Ninja producer", error);
             Assert.Contains("first-project", error);
@@ -199,7 +235,7 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
             var first = CreateNinjaNode(rule: "first", inputs: Paths("second.out"), outputs: Paths("first.out"));
             var second = CreateNinjaNode(rule: "second", inputs: Paths("first.out"), outputs: Paths("second.out"));
 
-            Assert.False(NinjaGraphStitcher.TrySort(new[] { Project("first-project", first), Project("second-project", second) },
+            Assert.False(NinjaGraphStitcher.TryStitch(new[] { Project("first-project", first), Project("second-project", second) },
                 PathTable, out _, out var error));
             Assert.Contains("Cycle", error);
             Assert.Contains("first-project", error);
