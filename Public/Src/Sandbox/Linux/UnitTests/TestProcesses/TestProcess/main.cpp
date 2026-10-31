@@ -172,6 +172,26 @@ int LastThreadExit()
     pthread_exit(nullptr);
 }
 
+// The managed side creates existingDirectory before running this test.
+int MkdirOnExistingDirectory()
+{
+    GET_CWD;
+    std::string dirPath(cwd);
+    dirPath.append("/existingDirectory");
+
+    int result = mkdir(dirPath.c_str(), 0755);
+    return (result == -1 && errno == EEXIST) ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+int MkdirOnNewDirectory()
+{
+    GET_CWD;
+    std::string dirPath(cwd);
+    dirPath.append("/newDirectory");
+
+    return mkdir(dirPath.c_str(), 0755) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
 int main(int argc, char **argv)
 {
     int opt;
@@ -319,6 +339,8 @@ int main(int argc, char **argv)
     IF_COMMAND(AccessLongPath);
     IF_COMMAND(ReadLinkOnDirectoryIsRead);
     IF_COMMAND(LastThreadExit);
+    IF_COMMAND(MkdirOnExistingDirectory);
+    IF_COMMAND(MkdirOnNewDirectory);
 
     // Invalid command
     exit(-1);

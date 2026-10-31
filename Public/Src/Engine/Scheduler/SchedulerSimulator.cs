@@ -37,6 +37,7 @@ namespace BuildXL.Scheduler
         private readonly LoggingContext m_loggingContext;
         private readonly IConfiguration m_config;
         private readonly PipGraph m_pipGraph;
+        private readonly HistoricPerfDataTable m_historicPerfDataTable;
         private readonly IReadonlyDirectedGraph m_scheduledGraph;
         private readonly Func<PipId, int> m_getPipPriorityFunc;
 
@@ -73,9 +74,9 @@ namespace BuildXL.Scheduler
             public int CoreMinutes;
         }
 
-        private enum PipPhase { CacheLookup, Executable, Completed }
+        internal enum PipPhase { CacheLookup, Executable, Completed }
 
-        private class PipInfo
+        internal class PipInfo
         {
             public int NumIncomingEdges;
             public int RefCount;
@@ -86,16 +87,29 @@ namespace BuildXL.Scheduler
             public NodeId NodeId;
         }
 
-        private class ProcessPipInfo : PipInfo
+        internal class ProcessPipInfo : PipInfo
         {
             public int ExecuteDurationMs;
+            public readonly int CpuUsageInPercent;
+            public int AcquiredExecuteSlots;
             public int MemoryUsageMb;
             public int CacheLookupDurationMs;
             public bool IsCacheHit;
             public PipPhase Phase = PipPhase.CacheLookup;
+
+            public ProcessPipInfo(int cpuUsageInPercent = 0)
+            {
+                Contract.Requires(cpuUsageInPercent >= 0);
+                // Missing or zero historical CPU data retains the previous single-core estimate.
+                CpuUsageInPercent = cpuUsageInPercent > 0 ? cpuUsageInPercent : 100;
+            }
+
+            public int CpuWeight => ProcessPipHistoricPerfData.ComputeCpuWeight(CpuUsageInPercent);
+
+            public double EstimatedCpuTimeMs => IsCacheHit ? 0 : ExecuteDurationMs * ProcessPipHistoricPerfData.ComputeCpuUsageInCores(CpuUsageInPercent);
         }
 
-        private class Worker
+        internal class Worker
         {
             public int TotalExecuteSlots;
             public int TotalMemory;
@@ -103,6 +117,7 @@ namespace BuildXL.Scheduler
             public int AvailableMemory;
             public int TotalCacheLookupSlots;
             public int AvailableCacheLookupSlots;
+            private int m_executingProcessCount;
 
             public Worker(int memoryLimitMb, int executeSlots, int cacheLookupSlots)
             {
@@ -128,17 +143,30 @@ namespace BuildXL.Scheduler
                 }
                 else if (process.Phase == PipPhase.Executable)
                 {
-                    if (AvailableExecuteSlots > 0 && AvailableMemory >= process.MemoryUsageMb)
+                    int executeSlots = Math.Min(process.CpuWeight, TotalExecuteSlots);
+                    // Like the live scheduler, allow one process on an idle worker even if it exceeds RAM.
+                    if (AvailableExecuteSlots >= executeSlots &&
+                        (AvailableMemory >= process.MemoryUsageMb || m_executingProcessCount == 0))
                     {
                         process.EndTime = process.StartTime + process.ExecuteDurationMs;
                         process.Worker = this;
-                        AvailableExecuteSlots--;
+                        process.AcquiredExecuteSlots = executeSlots;
+                        AvailableExecuteSlots -= executeSlots;
                         AvailableMemory -= process.MemoryUsageMb;
+                        m_executingProcessCount++;
                         return true;
                     }
                 }
 
                 return false;
+            }
+
+            internal void ReleaseExecutionResources(ProcessPipInfo process)
+            {
+                AvailableExecuteSlots += process.AcquiredExecuteSlots;
+                process.AcquiredExecuteSlots = 0;
+                AvailableMemory += process.MemoryUsageMb;
+                m_executingProcessCount--;
             }
         }
 
@@ -147,6 +175,7 @@ namespace BuildXL.Scheduler
             LoggingContext loggingContext,
             IConfiguration config,
             PipGraph pipGraph,
+            HistoricPerfDataTable historicPerfDataTable,
             ConcurrentDictionary<PipId, RunnablePipPerformanceInfo> runnablePipPerformance,
             IReadonlyDirectedGraph scheduledGraph,
             Func<PipId, int> getPipPriorityFunc,
@@ -155,6 +184,7 @@ namespace BuildXL.Scheduler
             m_loggingContext = loggingContext;
             m_config = config;
             m_pipGraph = pipGraph;
+            m_historicPerfDataTable = historicPerfDataTable;
             m_runnablePipPerformance = runnablePipPerformance;
             m_initialAvailableRamMb = initialAvailableRamMb;
             m_scheduledGraph = scheduledGraph;
@@ -172,7 +202,7 @@ namespace BuildXL.Scheduler
         /// <summary>
         /// Creates a deep clone of the m_pips array so that each simulation run can work independently.
         /// </summary>
-        private PipInfo[] ClonePips(PipInfo[] source)
+        internal static PipInfo[] ClonePips(PipInfo[] source)
         {
             PipInfo[] clone = new PipInfo[source.Length];
             for (int i = 0; i < source.Length; i++)
@@ -183,7 +213,7 @@ namespace BuildXL.Scheduler
                 }
                 if (source[i] is ProcessPipInfo processPip)
                 {
-                    clone[i] = new ProcessPipInfo
+                    clone[i] = new ProcessPipInfo(processPip.CpuUsageInPercent)
                     {
                         NumIncomingEdges = processPip.NumIncomingEdges,
                         Priority = processPip.Priority,
@@ -243,6 +273,7 @@ namespace BuildXL.Scheduler
 
                         var isCacheHit = perfInfo.CacheLookupPerfInfo?.CacheMissType == PipCacheMissType.Hit;
                         var memoryUsageMb = perfInfo.ActualAverageWorkingSetMb;
+                        int cpuUsageInPercent = m_historicPerfDataTable[m_pipGraph.PipTable.GetPipSemiStableHash(pipId)].ProcessorsInPercents;
 
                         var cacheLookupDurationMs = getStepDuration(perfInfo, PipExecutionStep.CacheLookup);
 
@@ -250,7 +281,7 @@ namespace BuildXL.Scheduler
                         // Total execute duration after cachelookup includes materialization and postprocess steps as well. 
                         var executeDurationMs = getStepDuration(perfInfo, PipExecutionStep.MaterializeInputs) + exeDurationMs + getStepDuration(perfInfo, PipExecutionStep.PostProcess);
 
-                        m_pips[i] = new ProcessPipInfo
+                        m_pips[i] = new ProcessPipInfo(cpuUsageInPercent)
                         {
                             ExecuteDurationMs = executeDurationMs,
                             CacheLookupDurationMs = cacheLookupDurationMs,
@@ -302,7 +333,7 @@ namespace BuildXL.Scheduler
                             var pips = pipsInstance.Instance;
 
                             // Calculate build duration for the current configuration
-                            double durationMin = RunSimulation(pips, numWorkers, memoryLimitMb, executeSlots, cacheLookupSlots);
+                            double durationMin = RunSimulation(pips, m_scheduledGraph, numWorkers, memoryLimitMb, executeSlots, cacheLookupSlots);
 
                             return new SimulationResult()
                             {
@@ -326,7 +357,7 @@ namespace BuildXL.Scheduler
                     .ThenBy(kvp => kvp.Key.Item1.Name)
                     .ThenBy(kvp => kvp.Key.Item2);
 
-                long totalExecuteDurationMs = m_pips.Where(a => a != null).OfType<ProcessPipInfo>().Sum(a => a.ExecuteDurationMs);
+                double totalCpuTimeMs = m_pips.OfType<ProcessPipInfo>().Sum(a => a.EstimatedCpuTimeMs);
 
                 // Weight for duration in [0..1]. (0 = only cost matters, 1 = only duration matters)
                 double[] weights = { 0.5, 0.7, 0.8, 0.9 };
@@ -340,13 +371,8 @@ namespace BuildXL.Scheduler
                     string[] scores = weights.Select(weight => CalculateBuildEfficiencyScore(weight, result.DurationMin, result.CoreMinutes, minDuration, maxDuration, minCoreMinutes, maxCoreMinutes).ToString("0.0")).ToArray();
                     string durationMin = result.DurationMin.ToString("0.0");
 
-                    // Calculate the core utilization percentage, which measures the fraction of total available core–time that was actively used.
-                    // - totalExeDurationMs / 60000: the sum of execution times (in minutes) for all process pips (i.e. the total busy core time).
-                    // - result.DurationMin: the overall build duration in minutes.
-                    // - numWorkers * sku.Cpus: the total number of cores available across all workers.
-                    // Therefore, (result.DurationMin * numWorkers * sku.Cpus) represents the maximum available core–minutes.
-                    // The ratio (total busy core–minutes) / (total available core–minutes), multiplied by 100 and rounded, yields the core utilization percentage.
-                    var coreUtilization = result.DurationMin > 0 ? (int)Math.Round(100 * (totalExecuteDurationMs / 60000.00 / (result.DurationMin * numWorkers * sku.Cpus))) : 0;
+                    // Busy CPU time differs from provisioned core time, which remains the basis for cost.
+                    var coreUtilization = CalculateCoreUtilization(totalCpuTimeMs, result.DurationMin, numWorkers, sku.Cpus);
 
                     var coreHours = (int)Math.Round(result.CoreMinutes / 60.0);
 
@@ -408,11 +434,18 @@ namespace BuildXL.Scheduler
             return 100 - ((weightForDuration * rescaledDuration) + ((1 - weightForDuration) * rescaledCost)) * 100;
         }
 
+        internal static int CalculateCoreUtilization(double totalCpuTimeMs, double durationMin, int workerCount, int cpus)
+        {
+            return durationMin > 0
+                ? (int)Math.Round(100 * totalCpuTimeMs / 60000.0 / (durationMin * workerCount * cpus))
+                : 0;
+        }
+
         /// <summary>
         /// Runs a simulation of the build scheduling using the specified worker configuration. 
         /// Returns the total build duration in minutes.
         /// </summary>
-        private double RunSimulation(PipInfo[] pips, int workerCount, int memoryLimitMb, int executeSlots, int cacheLookupSlots)
+        internal static double RunSimulation(PipInfo[] pips, IReadonlyDirectedGraph scheduledGraph, int workerCount, int memoryLimitMb, int executeSlots, int cacheLookupSlots)
         {
             // Initialize workers with the given configuration.
             // Each worker maintains its own resource availability.
@@ -552,7 +585,7 @@ namespace BuildXL.Scheduler
             // When a pip's RefCount equals its required incoming edges, add it to the ready set.
             void iterateDependents(PipInfo pip)
             {
-                foreach (var edge in m_scheduledGraph.GetOutgoingEdges(pip.NodeId))
+                foreach (var edge in scheduledGraph.GetOutgoingEdges(pip.NodeId))
                 {
                     if (edge.IsLight)
                     {
@@ -598,8 +631,7 @@ namespace BuildXL.Scheduler
                 else if (process.Phase == PipPhase.Executable)
                 {
                     // Free CPU and memory on the worker.
-                    worker.AvailableExecuteSlots++;
-                    worker.AvailableMemory += process.MemoryUsageMb;
+                    worker.ReleaseExecutionResources(process);
                     process.Phase = PipPhase.Completed;
                 }
 
@@ -611,7 +643,7 @@ namespace BuildXL.Scheduler
             }
         }
 
-        private void ResetPipStates(PipInfo[] pips)
+        internal static void ResetPipStates(PipInfo[] pips)
         {
             // Clearing the states.
             foreach (var pip in pips)
@@ -633,6 +665,7 @@ namespace BuildXL.Scheduler
                 }
 
                 process.Phase = PipPhase.CacheLookup;
+                process.AcquiredExecuteSlots = 0;
             }
         }
     }

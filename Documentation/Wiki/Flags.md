@@ -68,7 +68,7 @@ This page lists flags that can be used to configure BuildXL.
 | Environment | Environment build is running in. Allowed values '{0}'. |
 | ExitOnNewGraph | When enabled, exit early if a new graph needs to be created.  This differs from phase:schedule because it doesn't actually create the graph. |
 | Experimental__0 | Enables an experimental feature (short form: /exp). Available experimental features: {0} |
-| ExperimentalSharedOpaqueTracking | Enables experimental shared opaque tracking while preserving input and output timestamp policies. Automatically configures the sandbox to allow and report accesses for post-execution validation instead of blocking them immediately; undeclared accesses remain errors by default. Defaults to off. |
+| ExperimentalSharedOpaqueTracking | Enables experimental shared opaque tracking while preserving input and output timestamp policies. Reads of shared opaque inputs are allowed and reported through a directory scope and validated against the declared contents after execution; undeclared accesses are still blocked and remain errors. Defaults to on. |
 | ExplicitlyReportDirectoryProbes | When enabled, detours will explicitly report directory probes. Note that this may result in an increased amount of DFAs. |
 | FancyConsole | When enabled, the console will give frequent updates of the status of processes that are running. Defaults to off. |
 | FancyConsoleMaxStatusPips | Maximum number of concurrently executing pips to render in Fancy Console view. Defaults to 5. |
@@ -82,6 +82,7 @@ This page lists flags that can be used to configure BuildXL.
 | Filter | Specifies a filter expression (short form: /f). See verbose help (/help:verbose) for details about constructing filter expressions. |
 | FilteringInfo | You can choose to build only a subset of available pips by using filtering. |
 | FingerprintSalt | Salts fingerprints used for caching. May be specified multiple times and values concatenate with delimiter. Empty value clears previous values. '*' is unique each run. |
+| FingerprintStoreDrainTimeoutMinutes | Minutes to drain the fingerprint store queue before dropping pending events. Active events finish. Default: 10; 0 means unlimited. |
 | FlushPageCacheToFileSystemOnStoringOutputsToCache | Flush page cache to file system on storing outputs to cache. Defaults to off. |
 | ForceAddExecutionPermission | When set to true, it enables the execution permission for the root process of process pips in Linux builds. Defaults to true. |
 | ForwardWorkerLog | Configure additional verbose event IDs that workers will forward to the orchestrator, in addition to warnings and errors (which are always forwarded).  |
@@ -188,7 +189,7 @@ This page lists flags that can be used to configure BuildXL.
 | SandboxKind | Specifies the sandbox kind. Allowed values are 'None' (no sandboxing), 'Default' (default sandboxing), 'WinDetours'. Default is 'Default'. |
 | ScanChangeJournal | Scans volume change journals to determine spec file changes for graph reuse check. Defaults to on. |
 | ScanChangeJournalTimeLimitInSec | Time limit in second for scanning volume change journal. Set to -1 for no limit. Defaults to 30 seconds. |
-| SchedulerSimulator | Whether to conduct simulations using a variety of SKU and worker count combinations to estimate the build duration. |
+| SchedulerSimulator | Simulate build duration across SKU and worker count combinations using historical CPU usage for slot demand and estimated utilization, and measured average working sets for memory reservations. An idle worker may run one pip exceeding its RAM limit to prevent deadlock; this does not model its slowdown or physical feasibility. Unsampled memory usage remains zero. Missing or zero CPU data defaults to one core; slot reservations are bounded by worker capacity. Core-hours measure provisioned capacity. Measured pip durations are not scaled across SKUs. |
 | ScriptShowLargest | Indicates whether {ShortProductName} should log information about the largest {ShortScriptName} files. Defaults to off. |
 | ScriptShowSlowest | Indicates whether {ShortProductName} should log information about the slowest {ShortScriptName} elements by phase. Defaults to off. |
 | ScriptTypeCheck | Type checks specifications. Defaults to on. |
