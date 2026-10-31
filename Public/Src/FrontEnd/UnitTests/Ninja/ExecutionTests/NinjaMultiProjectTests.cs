@@ -242,6 +242,207 @@ default ../out/result.txt
             return config;
         }
 
+        private void EnableProjectLinking(ICommandLineConfiguration config, string dependencies = "'producer'")
+        {
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(path, File.ReadAllText(path)
+                .Replace("name: 'consumer',", $"name: 'consumer', dependencies: [{dependencies}],"));
+        }
+
+        private void MakeDirectoryProducerDynamic()
+        {
+            File.WriteAllText(Path.Combine(SourceRoot, "producer", "build.ninja"), @"
+rule produce
+  command = mkdir -p ../sdk && printf '%s:' ""$$VALUE"" > ../sdk/shared.txt && cat local.txt >> ../sdk/shared.txt && touch $out
+build done: produce local.txt
+default done
+");
+        }
+
+        [Fact]
+        public void ProjectDependenciesLinkMultipleActionsWithoutBlanketExecutionEdges()
+        {
+            var config = CreateConfiguration();
+            EnableProjectLinking(config, "'PrOdUcEr'");
+            File.AppendAllText(Path.Combine(SourceRoot, "producer", "build.ninja"), @"
+rule unrelated
+  command = printf unrelated > $out
+build unrelated.txt: unrelated
+default unrelated.txt
+");
+            var result = RunEngineWithConfig(config);
+
+            Assert.True(result.IsSuccess);
+            var processes = result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>().ToList();
+            Assert.Equal(3, processes.Count);
+            var consumer = processes.Single(process => process.FileOutputs.Any(file =>
+                file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "final.txt"));
+            var input = Assert.Single(consumer.Dependencies.Where(file => file.IsOutputFile));
+            Assert.Equal("shared.txt", input.Path.GetName(PathTable).ToString(PathTable.StringTable));
+            Assert.Contains(input, processes.Single(process => process.FileOutputs.Any(file => file.Path == input.Path))
+                .FileOutputs.Select(file => file.ToFileArtifact()));
+            Assert.Empty(consumer.DirectoryDependencies);
+            Assert.Equal("consumer:unset:consumer-local:producer:producer-local",
+                File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ProjectDependenciesPreserveDirectoryArtifacts(bool dynamic)
+        {
+            var config = CreateDirectoryConfiguration();
+            EnableProjectLinking(config);
+            if (dynamic)
+            {
+                var path = config.Startup.ConfigFile.ToString(PathTable);
+                File.WriteAllText(path, File.ReadAllText(path).Replace("directoryExports:", "directoryOutputs:"));
+                MakeDirectoryProducerDynamic();
+            }
+
+            var result = RunEngineWithConfig(config);
+
+            Assert.True(result.IsSuccess);
+            var consumer = result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>()
+                .Single(process => process.DirectoryDependencies.Length != 0);
+            var directory = Assert.Single(consumer.DirectoryDependencies);
+            var seal = result.EngineState.PipGraph.RetrievePipsOfType(PipType.SealDirectory).OfType<SealDirectory>()
+                .Single(candidate => candidate.Directory == directory);
+            Assert.Equal(dynamic ? SealDirectoryKind.SharedOpaque : SealDirectoryKind.Partial, seal.Kind);
+            Assert.Equal("producer:producer-local", File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+        }
+
+        [Theory]
+        [InlineData("", "without a direct project dependency")]
+        [InlineData("'unknown'", "unknown or duplicate dependency")]
+        [InlineData("'producer', 'PRODUCER'", "unknown or duplicate dependency")]
+        public void ProjectLinkingRejectsMissingOrInvalidDependencies(string dependencies, string diagnostic)
+        {
+            var config = CreateConfiguration();
+            EnableProjectLinking(config, dependencies);
+            Directory.CreateDirectory(Path.Combine(SourceRoot, "sdk"));
+            File.WriteAllText(Path.Combine(SourceRoot, "sdk", "shared.txt"), "stale-source");
+
+            Assert.False(RunEngineWithConfig(config).IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
+            AssertLogContains(false, diagnostic);
+        }
+
+        [Fact]
+        public void ProjectLinkingRejectsProjectCyclesEvenWhenActionGraphIsAcyclic()
+        {
+            var config = CreateConfiguration();
+            EnableProjectLinking(config);
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(path, File.ReadAllText(path)
+                .Replace("name: 'producer',", "name: 'producer', dependencies: ['consumer'],"));
+
+            Assert.False(RunEngineWithConfig(config).IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
+            AssertLogContains(false, "Cycle detected in project dependencies");
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ProjectLinkingRejectsUnresolvedGeneratedInputsEvenWhenFilesExist(bool hiddenExport)
+        {
+            var config = CreateConfiguration();
+            EnableProjectLinking(config);
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(path, File.ReadAllText(path)
+                .Replace("name: 'consumer',", "name: 'consumer', generatedInputs: [p`sdk/shared.txt`],")
+                .Replace("name: 'producer',", hiddenExport ? "name: 'producer', fileExports: []," : "name: 'producer',"));
+            if (!hiddenExport)
+            {
+                File.WriteAllText(Path.Combine(SourceRoot, "producer", "build.ninja"),
+                    "rule produce\n  command = printf unrelated > $out\nbuild unrelated.txt: produce\ndefault unrelated.txt\n");
+            }
+
+            Directory.CreateDirectory(Path.Combine(SourceRoot, "sdk"));
+            File.WriteAllText(Path.Combine(SourceRoot, "sdk", "shared.txt"), "stale-source");
+            Assert.False(RunEngineWithConfig(config).IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
+            AssertLogContains(false, "unresolved generated input");
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void PublicDirectoryExportsExposeMembersWithoutPublicFileExports(bool dynamic)
+        {
+            var config = CreateDirectoryConfiguration();
+            EnableProjectLinking(config);
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            var settings = File.ReadAllText(path).Replace("name: 'producer',", "name: 'producer', fileExports: [],");
+            File.WriteAllText(path, dynamic ? settings.Replace("directoryExports:", "directoryOutputs:") : settings);
+            if (dynamic)
+            {
+                MakeDirectoryProducerDynamic();
+            }
+            File.WriteAllText(Path.Combine(SourceRoot, "consumer", "build.ninja"),
+                "rule consume\n  command = cat ../sdk/shared.txt > $out\nbuild final.txt: consume ../sdk/shared.txt\ndefault final.txt\n");
+
+            var result = RunEngineWithConfig(config);
+
+            Assert.True(result.IsSuccess);
+            var consumer = result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>()
+                .Single(process => process.DirectoryDependencies.Length != 0);
+            Assert.DoesNotContain(consumer.Dependencies, file => file.IsSourceFile
+                && file.Path.GetName(PathTable).ToString(PathTable.StringTable) == "shared.txt");
+            Assert.Equal("producer:producer-local", File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+        }
+
+        [Fact]
+        public void OpaqueImportsDoNotExposePrivateExplicitFileOutputs()
+        {
+            var config = CreateDirectoryConfiguration();
+            EnableProjectLinking(config);
+            var path = config.Startup.ConfigFile.ToString(PathTable);
+            File.WriteAllText(path, File.ReadAllText(path)
+                .Replace("directoryExports:", "directoryOutputs:")
+                .Replace("name: 'producer',", "name: 'producer', fileExports: [],"));
+            File.WriteAllText(Path.Combine(SourceRoot, "consumer", "build.ninja"),
+                "rule consume\n  command = cat ../sdk/shared.txt > $out\nbuild final.txt: consume ../sdk/shared.txt\ndefault final.txt\n");
+
+            Assert.False(RunEngineWithConfig(config).IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.FrontEnd.Ninja.Tracing.LogEventId.InvalidResolverSettings);
+            AssertLogContains(false, "without a direct project dependency exporting that file");
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ProjectLinkedGraphTracksNinjaMetadataAndReusesUnchangedGraphs(bool changeMetadata)
+        {
+            var config = (CommandLineConfiguration)CreateConfiguration();
+            EnableProjectLinking(config);
+            config.Cache.CacheGraph = true;
+            config.Cache.AllowFetchingCachedGraphFromContentCache = true;
+            config.Cache.Incremental = true;
+            var cache = new TestCache();
+
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            AssertInformationalEventLogged(global::BuildXL.FrontEnd.Core.Tracing.LogEventId.FrontEndStartEvaluateValues);
+
+            if (changeMetadata)
+            {
+                var ninja = Path.Combine(SourceRoot, "producer", "build.ninja");
+                File.WriteAllText(ninja, File.ReadAllText(ninja).Replace("printf '%s:'", "printf 'metadata:%s:'"));
+            }
+
+            Assert.True(RunEngineWithConfig(config, cache).IsSuccess);
+            AssertInformationalEventLogged(global::BuildXL.FrontEnd.Core.Tracing.LogEventId.FrontEndStartEvaluateValues, count: changeMetadata ? 1 : 0);
+            if (!changeMetadata)
+            {
+                AssertInformationalEventLogged(global::BuildXL.Engine.Tracing.LogEventId.EndDeserializingEngineState);
+            }
+
+            var prefix = changeMetadata ? "metadata:" : "";
+            Assert.Equal($"consumer:unset:consumer-local:{prefix}producer:producer-local",
+                File.ReadAllText(Path.Combine(SourceRoot, "consumer", "final.txt")));
+        }
+
         [Theory]
         [InlineData("producer")]
         [InlineData("PrOdUcEr")]

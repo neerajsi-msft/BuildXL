@@ -33,6 +33,7 @@ namespace Ninja {
             Script.dll,
             Core.dll,
             Sdk.dll,
+            SdkProjectGraph.dll,
         ],
         internalsVisibleTo: [
             "Test.BuildXL.FrontEnd.Ninja"

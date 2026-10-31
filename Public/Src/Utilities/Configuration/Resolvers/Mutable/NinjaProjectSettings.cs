@@ -21,6 +21,9 @@ namespace BuildXL.Utilities.Configuration.Mutable
             Root = pathRemapper.Remap(template.Root);
             SpecFile = pathRemapper.Remap(template.SpecFile);
             Targets = template.Targets;
+            Dependencies = template.Dependencies?.ToArray();
+            FileExports = template.FileExports == null ? null : pathRemapper.Remap(template.FileExports);
+            GeneratedInputs = template.GeneratedInputs == null ? null : pathRemapper.Remap(template.GeneratedInputs);
             Environment = template.Environment;
             DirectoryExports = template.DirectoryExports == null ? null : pathRemapper.Remap(template.DirectoryExports);
             DirectoryOutputs = template.DirectoryOutputs == null ? null : pathRemapper.Remap(template.DirectoryOutputs);
@@ -38,6 +41,12 @@ namespace BuildXL.Utilities.Configuration.Mutable
         public AbsolutePath SpecFile { get; set; }
         /// <inheritdoc />
         public IReadOnlyList<string> Targets { get; set; }
+        /// <inheritdoc />
+        public IReadOnlyList<string> Dependencies { get; set; }
+        /// <inheritdoc />
+        public IReadOnlyList<AbsolutePath> FileExports { get; set; }
+        /// <inheritdoc />
+        public IReadOnlyList<AbsolutePath> GeneratedInputs { get; set; }
         /// <inheritdoc />
         public IReadOnlyDictionary<string, EnvironmentData> Environment { get; set; }
         /// <inheritdoc />

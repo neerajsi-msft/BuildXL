@@ -10,6 +10,7 @@ using BuildXL.FrontEnd.Sdk;
 using BuildXL.FrontEnd.Sdk.Evaluation;
 using BuildXL.FrontEnd.Sdk.Workspaces;
 using BuildXL.FrontEnd.Workspaces.Core;
+using BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver;
 using BuildXL.Utilities.Core;
 using BuildXL.Utilities.Configuration;
 
@@ -116,6 +117,11 @@ namespace BuildXL.FrontEnd.Ninja
                 return false;
             }
 
+            if (projects.Any(project => project.DependencyNames != null || project.FileExports != null || project.GeneratedInputs.Count != 0))
+            {
+                return TryEvaluateProjectGraph(projects, graph, module, qualifierId);
+            }
+
             var sharedState = new NinjaPipConstructor.SharedState { DirectoryMembers = graph.DirectoryMembers };
             var constructors = new Dictionary<NinjaProject, NinjaPipConstructor>();
             foreach (var project in projects)
@@ -144,6 +150,49 @@ namespace BuildXL.FrontEnd.Ninja
             }
 
             return true;
+        }
+
+        private bool TryEvaluateProjectGraph(
+            IReadOnlyList<NinjaProject> projects, NinjaGraphStitcher graph, ModuleDefinition module, QualifierId qualifierId)
+        {
+            var byName = projects.ToDictionary(project => project.Name, System.StringComparer.OrdinalIgnoreCase);
+            foreach (var project in projects)
+            {
+                var dependencies = new HashSet<NinjaProject>();
+                foreach (var name in project.DependencyNames ?? System.Array.Empty<string>())
+                {
+                    if (string.IsNullOrEmpty(name) || !byName.TryGetValue(name, out var dependency) || !dependencies.Add(dependency))
+                    {
+                        Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
+                            m_ninjaResolverSettings.Location(m_context.PathTable),
+                            $"Project '{project.Name}' declares an unknown or duplicate dependency '{name}'.");
+                        return false;
+                    }
+                }
+
+                project.Dependencies = dependencies;
+            }
+
+            var constructor = new NinjaProjectGraphConstructor(graph, m_context.PathTable,
+                (project, state, qualifier) => new NinjaPipConstructor(
+                    m_context, m_host, m_frontEndName, module, qualifier, project.Root, project.SpecFile,
+                    new NinjaPipConstructionSettings
+                    {
+                        UserDefinedEnvironment = project.Environment,
+                        UserDefinedPassthroughVariables = project.PassthroughVariables,
+                        UntrackingSettings = m_ninjaResolverSettings,
+                        AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
+                        AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
+                    }, state, project.Name, graph.DirectoryImports[project], project.DirectoryOutputs, project.SourceDirectories));
+            var result = new ProjectGraphToGraphConstructor<NinjaProject>(constructor)
+                .TrySchedule(projects.ToHashSet(), qualifierId);
+            if (!result.Succeeded)
+            {
+                Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
+                    m_ninjaResolverSettings.Location(m_context.PathTable), result.Failure.Describe());
+            }
+
+            return result.Succeeded;
         }
 
         /// <inheritdoc/>

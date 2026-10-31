@@ -24,6 +24,18 @@ namespace BuildXL.Utilities.Configuration
         /// <summary>Targets to import, or the graph defaults when omitted.</summary>
         IReadOnlyList<string> Targets { get; }
 
+        /// <summary>
+        /// Direct dependency project names. Setting this on any project opts the group into
+        /// project-level linking; omitted lists then mean no dependencies.
+        /// </summary>
+        IReadOnlyList<string> Dependencies { get; }
+
+        /// <summary>Public file outputs in project-linking mode. Omitted means all declared file outputs.</summary>
+        IReadOnlyList<AbsolutePath> FileExports { get; }
+
+        /// <summary>Required generated inputs; unresolved paths must never be treated as source files.</summary>
+        IReadOnlyList<AbsolutePath> GeneratedInputs { get; }
+
         /// <summary>Explicit environment for this project, including passthrough declarations.</summary>
         IReadOnlyDictionary<string, EnvironmentData> Environment { get; }
 

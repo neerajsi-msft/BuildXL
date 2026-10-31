@@ -275,6 +275,35 @@ namespace BuildXL.FrontEnd.Ninja
             return true;
         }
 
+        internal bool TryGetDirectoryExport(AbsolutePath root, out StaticDirectory export)
+        {
+            var key = (m_projectName, root);
+            if (m_directoryOutputs.Contains(root))
+            {
+                export = StaticDirectory.CreateForOutputDirectory(m_sharedState.SealedDirectories[key]);
+                return true;
+            }
+
+            var files = m_sharedState.DirectoryMembers[key]
+                .Select(path => m_sharedState.OutputFileArtifacts[path]).ToArray();
+            if (!m_pipConstructionHelper.TrySealDirectory(
+                root,
+                SortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>.CloneAndSort(files, OrdinalFileArtifactComparer.Instance),
+                CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                SealDirectoryKind.Partial, null, $"Ninja directory export '{m_projectName}': {root.ToString(m_context.PathTable)}",
+                null, out var directory))
+            {
+                export = null;
+                return false;
+            }
+
+            m_sharedState.SealedDirectories.Add(key, directory);
+            export = new StaticDirectory(directory, SealDirectoryKind.Partial,
+                SortedReadOnlyArray<FileArtifact, OrdinalPathOnlyFileArtifactComparer>.CloneAndSort(
+                    files, OrdinalPathOnlyFileArtifactComparer.Instance));
+            return true;
+        }
+
         private void AddInputs(NinjaNode node, ProcessBuilder processBuilder)
         {
 

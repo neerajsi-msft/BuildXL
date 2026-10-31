@@ -43,18 +43,21 @@ namespace Test.BuildXL.FrontEnd.Ninja
         }
 
         [TheoryIfSupported(requiresLinuxBasedOperatingSystem: true)]
-        [InlineData(false, false)]
-        [InlineData(false, true)]
-        [InlineData(true, false)]
-        [InlineData(true, true)]
-        public void SourceSealsEnforceExclusionsInBothResolverForms(bool grouped, bool excluded)
+        [InlineData(false, false, false)]
+        [InlineData(false, true, false)]
+        [InlineData(true, false, false)]
+        [InlineData(true, true, false)]
+        [InlineData(true, false, true)]
+        [InlineData(true, true, true)]
+        public void SourceSealsEnforceExclusionsInBothResolverForms(bool grouped, bool excluded, bool projectLinking)
         {
             const string project = @"
                 root: d`source`,
                 environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
                 sourceDirectories: [{ root: d`source`, excludedNames: [a`.git`] }],
             ";
-            var projectSettings = grouped ? $"projects: [{{ name: 'source', {project} }}]," : project;
+            var dependencies = projectLinking ? "dependencies: []," : "";
+            var projectSettings = grouped ? $"projects: [{{ name: 'source', {dependencies} {project} }}]," : project;
             var config = Build()
                 .Configuration($@"
 config({{

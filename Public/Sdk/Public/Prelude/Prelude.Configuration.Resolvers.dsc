@@ -974,6 +974,14 @@ interface NinjaProject {
     specFile?: File;
     /** Targets to import, or the graph's default targets. */
     targets?: string[];
+    /** Opts the group into project-level linking. Only direct dependencies' exports are visible.
+     * Omitted lists then mean no dependencies. Omit on every project to retain action-level stitching.
+     */
+    dependencies?: string[];
+    /** Public files in project-linking mode. Omitted means all declared file outputs; [] hides all files. */
+    fileExports?: Path[];
+    /** Required generated inputs in project-linking mode; missing providers are errors even if files exist on disk. */
+    generatedInputs?: Path[];
     /** Complete project environment; an empty map hides user variables. */
     environment: Map<string, (PassthroughEnvironmentVariable | EnvironmentData)>;
     /** Partial seals of this project's declared file outputs below each root. Empty exports are errors. */

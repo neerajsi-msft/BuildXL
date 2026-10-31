@@ -152,7 +152,7 @@ namespace BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver
                 (Possible<ProjectGraphSchedulingResult<TProject>>)failure;
         }
 
-        private static bool TryTopoSortProjectsAndComputeClosure(
+        internal static bool TryTopoSortProjectsAndComputeClosure(
             IReadOnlySet<TProject> filteredProjects,
             out PriorityQueue<(TProject, int tier)> topoSortedQueue,
             out IEnumerable<TProject> cycle)

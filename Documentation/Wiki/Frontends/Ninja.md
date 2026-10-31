@@ -198,3 +198,71 @@ In the Examples folder in this repository you can find:
   producers must be constructed before consumers, even when actions interleave projects.
 - Static partial exports, dynamic shared-opaque outputs, source seals and the legacy
   single-project configuration remain supported.
+
+### Forward-looking project/subgraph integration
+
+The additive `IProjectToGraphConstructor<TProject>` contract takes a project,
+its direct dependencies' `ProjectGraphOutputs`, and a qualifier. It constructs
+an arbitrary pip subgraph and returns public artifacts. `IProjectWithDependencies`
+remains unchanged, as do the existing MSBuild/JavaScript process constructors
+and custom-scheduling hooks. The shared `ProjectGraphToGraphConstructor` computes
+and validates the selected project closure before construction, using the existing
+topological sorter. Initial construction is sequential; parallelizing independent
+projects is a future optimization, not part of the artifact contract.
+
+`ProjectGraphOutputs.Files` maps paths to actual `FileArtifact` values, including
+rewrite counts. `Directories` maps roots to `StaticDirectory` values, preserving
+directory identity, seal kind, and known membership. There is deliberately no
+single owning process ID. A constructor may explicitly re-export dependency
+artifacts, but transitive dependency visibility is not automatic. Unscheduled
+projects have no exports; their dependencies are still traversed.
+
+For Ninja, setting `dependencies`, `fileExports`, or a nonempty `generatedInputs`
+on any grouped project opts the group into this contract:
+
+```typescript
+// Provider: its Ninja graph may contain multiple producing actions.
+{
+    name: "headers",
+    root: d`headers`,
+    dependencies: [],
+    fileExports: [p`sdk/include/api.h`],
+    directoryExports: [p`sdk/include`],
+    environment: Map.empty<string, string>().add("PATH", "/usr/bin:/bin"),
+},
+// Consumer:
+{
+    name: "application",
+    root: d`application`,
+    dependencies: ["headers"],
+    generatedInputs: [p`sdk/include/api.h`],
+    environment: Map.empty<string, string>().add("PATH", "/usr/bin:/bin"),
+},
+```
+
+In this mode, omitted dependency lists mean no dependencies. Names are matched
+case-insensitively. Omitted `fileExports` exports all declared file outputs;
+an empty list hides them. Export paths must have producers inside the project.
+Directory exports remain explicitly configured. Consumers still declare Ninja
+file inputs or `directoryImports`; merely listing a project dependency adds no
+blanket execution edges. Imported partial-directory members retain their actual
+file artifacts, while runtime-discovered opaque members use directory artifacts.
+Missing required generated inputs fail linking even when stale files exist on
+disk. Ordinary Ninja inputs remain sources when no generated classification or
+known producer applies.
+
+The Ninja adapter currently indexes and validates the whole imported group before
+project construction. All configured projects are roots; `targets` still controls
+each Ninja graph's extraction closure. The generic constructor supports a selected
+project closure, but resolver-level project filtering and lazy loading of unrelated
+invalid graphs are not implemented. Action-level cycles remain errors; additionally,
+project cycles are rejected even when the action graph itself is acyclic.
+Projects whose actions interleave must retain the legacy mode by omitting the new
+settings on every project.
+
+The initial adapter remains within one Ninja resolver. Mixed resolver types,
+DScript lookup/callback projection, independently cached graph fragments, and
+per-project graph patching are future work. Whole-graph reuse continues through
+the existing frontend tracking mechanism: unchanged graphs can be reused, while
+Ninja metadata changes require reconstruction. Source seals are private project
+inputs, not automatically public exports.
