@@ -159,7 +159,7 @@ namespace BuildXL.Pips.Builders
         public RewritePolicy RewritePolicy { get; set; }
 
         /// <nodoc />
-        public AbsentPathProbeInUndeclaredOpaquesMode AbsentPathProbeUnderOpaquesMode {get; set; }
+        public AbsentPathProbeInUndeclaredOpaquesMode AbsentPathProbeUnderOpaquesMode { get; set; }
 
         // Service related
 
@@ -414,7 +414,7 @@ namespace BuildXL.Pips.Builders
         }
 
         /// <summary>
-        /// This is for testing purposes only.
+        /// Adds a scheduling-only prerequisite. Read access must be declared separately.
         /// </summary>        
         public void AddOrderDependency(PipId pipId)
         {
@@ -673,11 +673,11 @@ namespace BuildXL.Pips.Builders
                 directoryOutputArray[i] = partialDirectoryArtifact;
                 i++;
             }
-            var directoryOutputs = directoryOutputArray.Length == 0 
+            var directoryOutputs = directoryOutputArray.Length == 0
                 ? ReadOnlyArray<DirectoryArtifact>.Empty
                 : ReadOnlyArray<DirectoryArtifact>.FromWithoutCopy(directoryOutputArray);
 
-            var outputDirectoryExclusions = m_outputDirectoryExclusions.Instance.Count == 0 
+            var outputDirectoryExclusions = m_outputDirectoryExclusions.Instance.Count == 0
                 ? CollectionUtilities.EmptySet<AbsolutePath>()
                 : new ReadOnlyHashSet<AbsolutePath>(m_outputDirectoryExclusions.Instance);
 

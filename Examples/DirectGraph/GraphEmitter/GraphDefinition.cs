@@ -9,6 +9,9 @@ namespace GraphEmitter
 {
     internal sealed class GraphDefinition
     {
+        [JsonIgnore]
+        public bool IsProjectGraph { get; set; }
+
         [JsonProperty("modules", Required = Required.Always)]
         public IReadOnlyList<ModuleDefinition> Modules { get; set; }
     }
@@ -45,8 +48,11 @@ namespace GraphEmitter
 
     internal sealed class ProcessOperationDefinition : OperationDefinition
     {
-        [JsonProperty("executable", Required = Required.Always)]
+        [JsonProperty("executable")]
         public string Executable { get; set; }
+
+        [JsonProperty("executableFile")]
+        public FileReferenceDefinition ExecutableFile { get; set; }
 
         [JsonProperty("workingDirectory", Required = Required.Always)]
         public string WorkingDirectory { get; set; }
@@ -56,6 +62,9 @@ namespace GraphEmitter
 
         [JsonProperty("inputFiles")]
         public IReadOnlyList<FileReferenceDefinition> InputFiles { get; set; }
+
+        [JsonProperty("orderOnlyInputs")]
+        public IReadOnlyList<FileReferenceDefinition> OrderOnlyInputs { get; set; }
 
         [JsonProperty("inputDirectories")]
         public IReadOnlyList<DirectoryReferenceDefinition> InputDirectories { get; set; }
@@ -153,7 +162,10 @@ namespace GraphEmitter
     /// </summary>
     internal sealed class DirectoryReferenceDefinition
     {
-        [JsonProperty("producedBy", Required = Required.Always)]
+        [JsonProperty("dependency")]
+        public string Dependency { get; set; }
+
+        [JsonProperty("producedBy")]
         public string ProducedBy { get; set; }
 
         /// <summary>
@@ -165,6 +177,9 @@ namespace GraphEmitter
 
     internal sealed class FileReferenceDefinition
     {
+        [JsonProperty("dependency")]
+        public string Dependency { get; set; }
+
         [JsonProperty("sourcePath")]
         public string SourcePath { get; set; }
 

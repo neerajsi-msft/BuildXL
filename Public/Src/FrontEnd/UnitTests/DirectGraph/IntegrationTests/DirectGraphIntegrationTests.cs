@@ -37,6 +37,101 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
 
         protected override bool DisableDefaultSourceResolver => true;
 
+        [FactIfSupported(requiresLinuxBasedOperatingSystem: true)]
+        public void KatiGeneratedProjectFragmentsExecute()
+        {
+            string root = System.Environment.GetEnvironmentVariable("KATI_DIRECTGRAPH_FIXTURE");
+            if (string.IsNullOrEmpty(root))
+            {
+                Assert.Skip("Set KATI_DIRECTGRAPH_FIXTURE to the isolated Kati multi-project fixture directory to run interoperability validation.");
+            }
+
+            root = Path.GetFullPath(root);
+            string manifest = Path.Combine(root, "manifest.json");
+            var config = Build()
+                .Configuration($$"""
+                    config({
+                        resolvers: [{
+                            kind: "DirectGraph", moduleNames: [a`producer`, a`consumer`],
+                            workingDirectory: d`.`, tool: f`{{PathToEmitter.Replace('\\', '/')}}`,
+                            arguments: [{{JsonSerializer.Serialize(manifest)}}],
+                        }],
+                        mounts: [{ name: a`fixture`, path: p`{{root.Replace('\\', '/')}}`,
+                            trackSourceFileChanges: true, isReadable: true, isWritable: true }],
+                    });
+                    """)
+                .PersistSpecsAndGetConfiguration();
+            var mutable = (CommandLineConfiguration)config;
+            mutable.Engine.Phase = EnginePhases.Execute;
+            mutable.Sandbox.FileSystemMode = FileSystemMode.RealAndMinimalPipGraph;
+            mutable.DisableInBoxSdkSourceResolver = true;
+            using var tempFiles = new TempFileStorage(canGetFileNames: true, rootPath: TestOutputDirectory);
+            var result = CreateAndRunEngine(config, CreateAppDeployment(tempFiles), testRootDirectory: null,
+                rememberAllChangedTrackedInputs: true, engine: out _);
+            Assert.True(result.IsSuccess);
+            Assert.Equal(new[] { "#define GENERATED_VALUE 37", "directgraph-input" },
+                File.ReadAllLines(Path.Combine(root, "consumer", "consumer.out")));
+        }
+
+        [Fact]
+        public void ProjectFragmentsExecuteAndExposeRewrittenExportsToDScript()
+        {
+            string[] rewrite = OperatingSystemHelper.IsWindowsOS
+                ? new[] { CmdHelper.CmdX64, "/d", "/c", @"echo world>> out\a.txt" }
+                : new[] { CmdHelper.Bash, "-c", "echo world >> out/a.txt" };
+            var config = Build()
+                .Configuration($$"""
+                    config({
+                        resolvers: [
+                            {
+                                kind: "DirectGraph",
+                                moduleNames: [a`a`, a`b`],
+                                workingDirectory: d`.`,
+                                tool: f`{{PathToEmitter.Replace('\\', '/')}}`,
+                                arguments: ["projects.json"],
+                            },
+                            { kind: "DScript", modules: [{ moduleName: "consumer", projects: [f`consumer.dsc`] }] },
+                        ],
+                        mounts: [{ name: a`out`, path: p`out`, trackSourceFileChanges: true, isReadable: true, isWritable: true }],
+                    });
+                    """)
+                .AddFile("projects.json", """
+                    {"formatVersion":1,"roots":["b"],"projects":[
+                        {"name":"b","fragment":"b.json","dependencies":["a"]},
+                        {"name":"a","fragment":"a.json","dependencies":[]}]}
+                    """)
+                .AddFile("a.json", $$"""
+                    {"formatVersion":1,"operations":[
+                        {"kind":"writeFile","name":"write","destination":"out/a.txt","content":"hello\n"},
+                        {"kind":"process","name":"rewrite","executable":{{JsonSerializer.Serialize(rewrite[0])}},
+                         "workingDirectory":".","arguments":{{JsonSerializer.Serialize(rewrite[1..])}},
+                         "options":["dependsOnCurrentOs"],"rewrittenFiles":[{"producedBy":"write","path":"out/a.txt"}]}],
+                     "exports":{"files":[{"producedBy":"rewrite","path":"out/a.txt"}]} }
+                    """)
+                .AddFile("b.json", """
+                    {"formatVersion":1,"operations":[
+                        {"kind":"copyFile","name":"write","source":{"sourcePath":"out/a.txt"},"destination":"out/b.txt"}],
+                     "exports":{"files":[{"producedBy":"write","path":"out/b.txt"}]}}
+                    """)
+                .AddSpec("consumer.dsc", """
+                    import { files } from "b";
+                    const exported = files.get(p`out/b.txt`);
+                    const exists = Contract.assert(exported !== undefined);
+                    @@public
+                    export const artifact = exported;
+                    """)
+                .PersistSpecsAndGetConfiguration();
+            var mutable = (CommandLineConfiguration)config;
+            mutable.Engine.Phase = EnginePhases.Execute;
+            mutable.Sandbox.FileSystemMode = FileSystemMode.RealAndMinimalPipGraph;
+            mutable.DisableInBoxSdkSourceResolver = true;
+            using var tempFiles = new TempFileStorage(canGetFileNames: true, rootPath: TestOutputDirectory);
+            var result = CreateAndRunEngine(config, CreateAppDeployment(tempFiles), testRootDirectory: null,
+                rememberAllChangedTrackedInputs: true, engine: out _);
+            Assert.True(result.IsSuccess);
+            Assert.Equal(new[] { "hello", "world" }, File.ReadAllLines(Path.Combine(TestRoot, "out", "b.txt")));
+        }
+
         [Fact]
         public void EmittedPipsRunAndProduceTheirOutputs()
         {

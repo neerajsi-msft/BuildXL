@@ -437,6 +437,21 @@ namespace BuildXL.Engine.DirectGraph
 
             SetProcessRedirection(request, processBuilder);
 
+            foreach (var reference in request.OrderOnlyInputs)
+            {
+                if (reference.ReferenceCase != FileArtifactReference.ReferenceOneofCase.ProducedFile)
+                {
+                    throw new InvalidRequestException("An order-only prerequisite must name a produced file.");
+                }
+                ResolveProducedFile(reference.ProducedFile, "order_only_inputs");
+                var producer = Producer(reference.ProducedFile.ProducerOperationId, "order_only_inputs");
+                if (!producer.PipId.IsValid)
+                {
+                    throw new InvalidRequestException("An order-only prerequisite must name an executable or file-producing operation.");
+                }
+                processBuilder.AddOrderDependency(producer.PipId);
+            }
+
             if (!pipConstructionHelper.TryAddProcess(processBuilder, out var processOutputs, out var process))
             {
                 return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the process pip.");
@@ -449,7 +464,8 @@ namespace BuildXL.Engine.DirectGraph
             // only place a later reference to one can be resolved from.
             m_producedArtifacts[operationId] = new ProducedArtifacts(
                 outputFiles,
-                processOutputs.GetOutputDirectories().Select(outputDirectory => outputDirectory.Root).ToArray());
+                processOutputs.GetOutputDirectories().Select(outputDirectory => outputDirectory.Root).ToArray(),
+                process.PipId);
 
             return Success(operationId, process.SemiStableHash);
         }
@@ -478,7 +494,7 @@ namespace BuildXL.Engine.DirectGraph
                 return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the write-file pip.");
             }
 
-            m_producedArtifacts[operationId] = new ProducedArtifacts(new[] { destinationFile }, Array.Empty<DirectoryArtifact>());
+            m_producedArtifacts[operationId] = new ProducedArtifacts(new[] { destinationFile }, Array.Empty<DirectoryArtifact>(), writeFile.PipId);
             return Success(operationId, writeFile.SemiStableHash);
         }
 
@@ -509,7 +525,7 @@ namespace BuildXL.Engine.DirectGraph
                 return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the copy-file pip.");
             }
 
-            m_producedArtifacts[operationId] = new ProducedArtifacts(new[] { destinationFile }, Array.Empty<DirectoryArtifact>());
+            m_producedArtifacts[operationId] = new ProducedArtifacts(new[] { destinationFile }, Array.Empty<DirectoryArtifact>(), copyFile.PipId);
             return Success(operationId, copyFile.SemiStableHash);
         }
 
@@ -1109,7 +1125,7 @@ namespace BuildXL.Engine.DirectGraph
         /// What an operation produced that a later operation can refer to. The files are sorted by path, so that a
         /// reference is found by binary search.
         /// </summary>
-        private readonly record struct ProducedArtifacts(FileArtifact[] Files, DirectoryArtifact[] Directories);
+        private readonly record struct ProducedArtifacts(FileArtifact[] Files, DirectoryArtifact[] Directories, PipId PipId = default);
 
         /// <summary>
         /// Rejects the operation being dispatched as an invalid request. Thrown and caught only within dispatching.

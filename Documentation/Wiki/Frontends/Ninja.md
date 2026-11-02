@@ -266,3 +266,106 @@ per-project graph patching are future work. Whole-graph reuse continues through
 the existing frontend tracking mechanism: unchanged graphs can be reused, while
 Ninja metadata changes require reconstruction. Source seals are private project
 inputs, not automatically public exports.
+
+### DirectGraph textual project fragments (experimental)
+
+The reference emitter in `Examples/DirectGraph/GraphEmitter` accepts a versioned
+project manifest as an alternative to its original `modules` JSON. Configure
+the existing DirectGraph resolver with the emitter as `tool`, the manifest as
+its sole argument, and the selected projects as `moduleNames`. The tool reads
+the manifest and fragments under frontend sandbox tracking, links them, and
+streams their operations to BuildXL. It does not execute their recipes.
+
+```json
+{
+  "formatVersion": 1,
+  "roots": ["application"],
+  "projects": [
+    { "name": "headers", "fragment": "headers.dg.json", "dependencies": [] },
+    { "name": "application", "fragment": "application.dg.json", "dependencies": ["headers"] }
+  ]
+}
+```
+
+Every project must declare its dependencies; names are case-sensitive. The
+entire project DAG is validated before any construction stream opens. Omitted
+`roots` selects every project; otherwise construction includes the selected
+roots and their transitive dependencies. Fragments are currently loaded eagerly,
+including unselected projects, so their output ownership is known and stale
+generated files cannot be mistaken for sources.
+
+A fragment has `formatVersion: 1`, an optional `root`, an `operations` array,
+optional `dependencySets`, and optional `exports`. Manifest fragment paths are
+relative to the manifest file. Fragment paths are relative to its `root`, which
+defaults to the fragment file's directory; a manifest project can override it.
+Arguments, environment values, and write-file content are literal strings.
+
+```json
+{
+  "formatVersion": 1,
+  "operations": [
+    { "name": "generate", "kind": "writeFile", "destination": "sdk/api.h", "content": "/* generated */" }
+  ],
+  "exports": {
+    "files": [{ "producedBy": "generate", "path": "sdk/api.h" }]
+  }
+}
+```
+
+Operation names are local to a project and may be reused in other projects.
+Operations must be topologically ordered within each fragment. Files use
+`{ "sourcePath": "..." }`, `{ "producedBy": "local-operation", "path": "..." }`,
+or `{ "dependency": "direct-project-name", "path": "..." }` references.
+Directory references use `producedBy` (with an optional path when unambiguous)
+or `dependency` plus the exact exported root.
+Process executables can use the original source-path `executable` string or an
+`executableFile` file reference for an actual generated tool.
+
+Only direct dependencies' explicit exports are visible. Re-exports preserve the
+original producer reference. A source reference that names another project's
+known output is linked only when that output is visible; a stale disk file
+does not rescue a private or nondependency output. Partial-directory members
+retain their actual file producers. Dynamic-directory members use exported
+directory artifacts; an opaque export does not expose private explicit files.
+Consumers receive the same file rewrite and directory identities constructed
+by the original producers. The existing DScript `files` and `directories` maps
+expose each project's exports after successful completion.
+
+Process operations can reference shared file-reference arrays through
+`inputSets` and `orderOnlySets`, in addition to `inputFiles` and
+`orderOnlyInputs`. Their definitions live in `dependencySets`. These arrays
+are expanded in order during lowering; they compact the text, not the native
+pip graph. They do not yet retain Make-variable provenance or form a native
+dependency-group pip.
+
+Order-only produced-file references establish scheduling edges without read
+authorization or content fingerprint dependencies. Source order-only references
+are existence-checked by the tracked emitter. Actual reads still require file
+or directory inputs. This wire addition requires DirectGraph protocol version
+2; the textual format version is independently 1. Older emitters/engines fail
+explicitly on protocol skew.
+
+`GraphEmitter --validate projects.json` checks structural project linking
+without connecting to BuildXL. Actual pip validation and execution still require
+the resolver. Projects share one construction stream; independently scheduled
+cross-resolver fragments and per-project graph caching/patching are not provided.
+
+The experimental Kati backend emits this fragment format directly from its
+evaluated action graph with `ckati --direct_graph=project.dg.json <targets>`;
+it does not parse Ninja, and this option is mutually exclusive with `--ninja`.
+The caller supplies the project manifest and dependency declarations. Normal
+prerequisites authorize reads; order-only prerequisites do not. The supported
+subset includes grouped outputs, structural phony aliases, target-scoped
+recipes, and shared evaluated dependency lists. Depfiles, commandful phony
+targets, and several Make/Ninja-specific features are explicitly unsupported;
+this is not yet a drop-in full SDK build backend.
+
+The Linux interoperability test `KatiGeneratedProjectFragmentsExecute` accepts
+an isolated producer/consumer fixture through `KATI_DIRECTGRAPH_FIXTURE`.
+It consumes the original Kati-emitted `manifest.json` and fragments, executes
+them with the nested BuildXL engine, and checks the generated header and text
+concatenation. Only the outer test runner excludes that fixture's I/O from
+tracking; the nested engine still sandboxes the actual build processes.
+In this opt-in mode the outer test runner always executes, since its cache
+cannot replay external fixture outputs; caching remains enabled for the nested
+build processes and the rest of the build.

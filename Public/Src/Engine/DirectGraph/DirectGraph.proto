@@ -169,6 +169,11 @@ message AddProcessRequest {
     optional DoubleWritePolicy double_write_policy = 41;
     optional SourceRewritePolicy source_rewrite_policy = 42;
     optional AbsentPathProbeMode absent_path_probe_in_undeclared_opaque_mode = 43;
+
+    // Scheduling-only prerequisites. Each must name a file produced by an earlier operation.
+    // They do not authorize reads or contribute file content to the process fingerprint.
+    // Source-path references are rejected; the emitter must track/check their existence.
+    repeated FileArtifactReference order_only_inputs = 44;
 }
 
 // The process options of DScript's Transformer.execute, named after them in snake_case. Each is off unless set, as in

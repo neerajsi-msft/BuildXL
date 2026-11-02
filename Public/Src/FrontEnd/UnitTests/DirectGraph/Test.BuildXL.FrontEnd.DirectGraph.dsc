@@ -3,6 +3,7 @@
 
 namespace Test.DirectGraph {
     export declare const qualifier: BuildXLSdk.DefaultQualifier;
+    const katiFixture = Environment.getDirectoryValue("KATI_DIRECTGRAPH_FIXTURE");
 
     // The sources of the DirectGraph example, built here as well so the integration test has an emitter. Not recursive:
     // a `dotnet build` of the example leaves generated sources in subfolders.
@@ -24,9 +25,20 @@ namespace Test.DirectGraph {
         sources: [
             ...globR(d`SchedulingTests`, "*.cs"),
             ...globR(d`IntegrationTests`, "*.cs"),
+            f`${Context.getMount("SourceRoot").path}/Examples/DirectGraph/GraphEmitter/GraphDefinition.cs`,
+            f`${Context.getMount("SourceRoot").path}/Examples/DirectGraph/GraphEmitter/ProjectGraphDefinition.cs`,
         ],
         runTestArgs: {
+            envVars: katiFixture ? [{ name: "KATI_DIRECTGRAPH_FIXTURE", value: katiFixture.path }] : [],
+            tools: {
+                exec: {
+                    // External fixture outputs are not test-pip outputs and cannot be replayed by its cache.
+                    disableCacheLookup: katiFixture !== undefined,
+                },
+            },
             unsafeTestRunArguments: {
+                // Only the outer test runner ignores fixture I/O; the nested engine still sandboxes its pips.
+                untrackedScopes: katiFixture ? [katiFixture] : [],
                 // The integration tests run sandboxed processes themselves, so the test runner is not detoured
                 runWithUntrackedDependencies: !BuildXLSdk.Flags.IsEBPFSandboxForTestsEnabled,
             },
@@ -52,6 +64,7 @@ namespace Test.DirectGraph {
             Script.dll,
             Core.dll,
             ...importFrom("BuildXL.Cache.ContentStore").getGrpcPackages(true),
+            importFrom("Newtonsoft.Json").pkg,
         ],
         runtimeContent: [
             {

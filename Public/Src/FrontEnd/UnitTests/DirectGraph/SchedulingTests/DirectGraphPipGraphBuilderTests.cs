@@ -305,6 +305,39 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Fact]
+        public void OrderOnlyPrerequisitesDoNotBecomeFileInputs()
+        {
+            var written = Send(new GraphOperation
+            {
+                OperationId = 1,
+                AddWriteFile = new AddWriteFileRequest { Module = TestModule, Symbol = "ready", Destination = Path("ready.txt"), Content = Text("ready") },
+            });
+            Assert.Equal(GraphOperationResponseStatus.Success, written.Status);
+            var request = NewProcess("ordered", output: "ordered.txt");
+            request.OrderOnlyInputs.Add(ProducedFile(1, "ready.txt"));
+            var result = Send(new GraphOperation { OperationId = 2, AddProcess = request });
+            Assert.Equal(GraphOperationResponseStatus.Success, result.Status);
+            var process = m_pipGraph.RetrieveScheduledPips().OfType<Process>().Single();
+            var producer = m_pipGraph.RetrieveScheduledPips().OfType<WriteFile>().Single();
+            Assert.Equal(producer.PipId, Assert.Single(process.OrderDependencies));
+            Assert.DoesNotContain(process.Dependencies, file => file.Path == producer.Destination.Path);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void InvalidOrderOnlyReferencesAreRejected(bool source)
+        {
+            var request = NewProcess("invalidOrder", output: "ordered.txt");
+            request.OrderOnlyInputs.Add(source
+                ? new FileArtifactReference { SourcePath = Path("source.txt") }
+                : ProducedFile(99, "missing.txt"));
+            var result = Send(new GraphOperation { OperationId = 1, AddProcess = request });
+            Assert.Equal(GraphOperationResponseStatus.InvalidRequest, result.Status);
+            Assert.Empty(m_pipGraph.RetrieveScheduledPips());
+        }
+
+        [Fact]
         public void AnOutputCanRewriteAFileAnotherOperationProduced()
         {
             var producer = Send(new GraphOperation { OperationId = 1, AddProcess = NewProcess("producer", output: "rewritten.txt") });

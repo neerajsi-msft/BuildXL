@@ -43,12 +43,19 @@ namespace GraphEmitter
 
         private static async Task<int> RunAsync(string[] args)
         {
-            if (args.Length != 1)
+            bool validateOnly = args.Length == 2 && args[0] == "--validate";
+            if (args.Length != 1 && !validateOnly)
             {
-                Console.Error.WriteLine("Usage: GraphEmitter <graph.json>");
+                Console.Error.WriteLine("Usage: GraphEmitter [--validate] <graph.json|projects.json>");
                 return 1;
             }
 
+            var definition = ProjectGraphDefinition.Load(args[validateOnly ? 1 : 0]);
+            if (validateOnly)
+            {
+                Console.WriteLine($"Validated {definition.Modules.Count} modules and {definition.Modules.Sum(module => module.Operations.Count)} operations.");
+                return 0;
+            }
             string endpoint = Environment.GetEnvironmentVariable(ChannelEnvironmentVariable);
             if (string.IsNullOrWhiteSpace(endpoint))
             {
@@ -57,13 +64,12 @@ namespace GraphEmitter
 
             Console.WriteLine($"Using channel '{endpoint}'");
 
-            var definition = JsonConvert.DeserializeObject<GraphDefinition>(await File.ReadAllTextAsync(args[0]));
             if (definition?.Modules == null)
             {
                 throw new InvalidDataException("The graph definition must contain a 'modules' array.");
             }
 
-            var state = new EmitterState();
+            var state = new EmitterState { PreserveLiterals = definition.IsProjectGraph };
             var moduleNames = new HashSet<string>(StringComparer.Ordinal);
             ulong operationId = 1;
 
@@ -205,8 +211,9 @@ namespace GraphEmitter
             }
             else
             {
-                string wanted = ResolvePath(definition.Path);
-                path = directories.FirstOrDefault(directory => string.Equals(directory, wanted, StringComparison.OrdinalIgnoreCase));
+                string wanted = state.ResolvePath(definition.Path);
+                path = directories.FirstOrDefault(directory => string.Equals(directory, wanted,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
 
                 if (path == null)
                 {
@@ -229,7 +236,7 @@ namespace GraphEmitter
             EmitterState state,
             List<string> producedDirectories)
         {
-            string directoryRoot = ResolvePath(definition.DirectoryRoot);
+            string directoryRoot = state.ResolvePath(definition.DirectoryRoot);
             producedDirectories.Add(directoryRoot);
 
             var request = new AddCompositeSharedOpaqueDirectoryRequest
@@ -273,7 +280,7 @@ namespace GraphEmitter
                 Module = moduleName,
                 Symbol = definition.Name,
                 Source = CreateFileReference(definition.Source, state),
-                Destination = state.Values.Path(ResolvePath(definition.Destination)),
+                Destination = state.Values.Path(state.ResolvePath(definition.Destination)),
             };
 
             if (definition.Description != null)
@@ -295,7 +302,7 @@ namespace GraphEmitter
             EmitterState state,
             List<string> producedDirectories)
         {
-            string directoryRoot = ResolvePath(definition.DirectoryRoot);
+            string directoryRoot = state.ResolvePath(definition.DirectoryRoot);
             producedDirectories.Add(directoryRoot);
 
             var request = new AddSealDirectoryRequest
@@ -381,7 +388,7 @@ namespace GraphEmitter
             {
                 Module = moduleName,
                 Symbol = definition.Name,
-                Destination = state.Values.Path(ResolvePath(definition.Destination)),
+                Destination = state.Values.Path(state.ResolvePath(definition.Destination)),
                 Content = state.Values.String(definition.Content),
             };
 
@@ -405,12 +412,18 @@ namespace GraphEmitter
             List<string> producedDirectories)
         {
             var values = state.Values;
+            if ((definition.ExecutableFile != null) == !string.IsNullOrWhiteSpace(definition.Executable))
+            {
+                throw new InvalidDataException("A process must specify either executable or executableFile.");
+            }
             var request = new AddProcessRequest
             {
                 Module = moduleName,
                 Symbol = definition.Name,
-                Executable = new FileArtifactReference { SourcePath = values.Path(ResolvePath(definition.Executable)) },
-                WorkingDirectory = values.Path(ResolvePath(definition.WorkingDirectory)),
+                Executable = definition.ExecutableFile != null
+                    ? CreateFileReference(definition.ExecutableFile, state)
+                    : new FileArtifactReference { SourcePath = values.Path(state.ResolvePath(definition.Executable)) },
+                WorkingDirectory = values.Path(state.ResolvePath(definition.WorkingDirectory)),
                 Options = ParseProcessOptions(definition.Options),
             };
 
@@ -421,14 +434,14 @@ namespace GraphEmitter
 
             foreach (string argument in definition.Arguments ?? Array.Empty<string>())
             {
-                request.Arguments.Add(values.String(Environment.ExpandEnvironmentVariables(argument)));
+                request.Arguments.Add(values.String(state.PreserveLiterals ? argument : Environment.ExpandEnvironmentVariables(argument)));
             }
 
             foreach (string outputFile in definition.OutputFiles ?? Array.Empty<string>())
             {
                 request.OutputFiles.Add(new OutputFile
                 {
-                    Path = values.Path(ResolvePath(outputFile)),
+                    Path = values.Path(state.ResolvePath(outputFile)),
                     Existence = FileExistenceKind.Required,
                 });
             }
@@ -450,7 +463,7 @@ namespace GraphEmitter
 
             foreach (string producedDirectory in definition.ProducesDirectories ?? Array.Empty<string>())
             {
-                string path = ResolvePath(producedDirectory);
+                string path = state.ResolvePath(producedDirectory);
                 producedDirectories.Add(path);
                 request.OutputDirectories.Add(new OutputDirectory
                 {
@@ -478,6 +491,23 @@ namespace GraphEmitter
                 request.InputFiles.Add(CreateFileReference(input, state));
             }
 
+            foreach (var input in definition.OrderOnlyInputs ?? Array.Empty<FileReferenceDefinition>())
+            {
+                var reference = CreateFileReference(input, state);
+                if (reference.ReferenceCase == FileArtifactReference.ReferenceOneofCase.SourcePath)
+                {
+                    string path = state.ResolvePath(input.SourcePath);
+                    if (!File.Exists(path) && !Directory.Exists(path))
+                    {
+                        throw new InvalidDataException($"Order-only source prerequisite '{path}' does not exist.");
+                    }
+                }
+                else
+                {
+                    request.OrderOnlyInputs.Add(reference);
+                }
+            }
+
             return new GraphOperation
             {
                 OperationId = operationId,
@@ -498,7 +528,7 @@ namespace GraphEmitter
 
             if (hasSourcePath)
             {
-                return new FileArtifactReference { SourcePath = state.Values.Path(ResolvePath(definition.SourcePath)) };
+                return new FileArtifactReference { SourcePath = state.Values.Path(state.ResolvePath(definition.SourcePath)) };
             }
 
             if (!state.OperationIds.TryGetValue(definition.ProducedBy, out ulong producerOperationId))
@@ -512,7 +542,7 @@ namespace GraphEmitter
                 ProducedFile = new ProducedFileReference
                 {
                     ProducerOperationId = producerOperationId,
-                    Path = state.Values.Path(ResolvePath(definition.Path)),
+                    Path = state.Values.Path(state.ResolvePath(definition.Path)),
                 },
             };
         }
@@ -523,6 +553,10 @@ namespace GraphEmitter
         /// </summary>
         private sealed class EmitterState
         {
+            public bool PreserveLiterals { get; init; }
+
+            public string ResolvePath(string path) => PreserveLiterals ? Path.GetFullPath(path) : Program.ResolvePath(path);
+
             public DirectGraphValueRegistry Values { get; } = new();
 
             public Dictionary<string, ulong> OperationIds { get; } = new(StringComparer.Ordinal);
