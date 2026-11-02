@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using System.Diagnostics.ContractsLight;
+using System.Linq;
 using System.Threading.Tasks;
 using BuildXL.FrontEnd.Ninja.Serialization;
 using BuildXL.FrontEnd.Sdk;
@@ -75,29 +76,74 @@ namespace BuildXL.FrontEnd.Ninja
 
         private bool? TryEvaluate(ModuleDefinition module, QualifierId qualifierId)    // TODO: Async?
         {
+            if (m_ninjaResolverSettings.Projects != null)
+            {
+                return TryEvaluateProjects(module, qualifierId);
+            }
             
             NinjaGraphWithModuleDefinition result = m_ninjaWorkspaceResolver.ComputedProjectGraph.Result;
             
             // TODO: Actual filtering. For now [first development only] we schedule all pips because we are dealing with a single spec 'all'
             IReadOnlyCollection<NinjaNode> filteredNodes = result.Graph.Nodes;
 
-            var graphConstructor = new NinjaPipGraphBuilder(
+            var constructor = new NinjaPipConstructor(
                 m_context,
                 m_host,
+                m_frontEndName,
                 ModuleDef,
+                qualifierId,
                 m_ninjaWorkspaceResolver.ProjectRoot,
                 m_ninjaWorkspaceResolver.SpecFile,
-                qualifierId,
-                m_frontEndName,
                 new()
                 {
                     UserDefinedEnvironment = m_ninjaWorkspaceResolver.TrackedEnvironmentVariables,
                     UserDefinedPassthroughVariables = m_ninjaWorkspaceResolver.UserDefinedPassthroughEnvironmentVariables,
                     UntrackingSettings = m_ninjaResolverSettings,
-                    AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories
-                });
+                    AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
+                    AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
+                }, sourceDirectories: m_ninjaResolverSettings.SourceDirectories);
 
-            return graphConstructor.TrySchedulePips(filteredNodes, qualifierId);
+            return filteredNodes.All(node => constructor.TrySchedulePip(node, out _));
+        }
+
+        private bool TryEvaluateProjects(ModuleDefinition module, QualifierId qualifierId)
+        {
+            var projects = m_ninjaWorkspaceResolver.Projects;
+            if (!NinjaGraphStitcher.TryStitch(projects, m_context.PathTable, out var graph, out var error))
+            {
+                Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
+                    m_ninjaResolverSettings.Location(m_context.PathTable), error);
+                return false;
+            }
+
+            var sharedState = new NinjaPipConstructor.SharedState { DirectoryMembers = graph.DirectoryMembers };
+            var constructors = new Dictionary<NinjaProject, NinjaPipConstructor>();
+            foreach (var project in projects)
+            {
+                constructors.Add(project, new NinjaPipConstructor(
+                    m_context, m_host, m_frontEndName, module, qualifierId, project.Root, project.SpecFile,
+                    new NinjaPipConstructionSettings
+                    {
+                        UserDefinedEnvironment = project.Environment,
+                        UserDefinedPassthroughVariables = project.PassthroughVariables,
+                        UntrackingSettings = m_ninjaResolverSettings,
+                        AdditionalOutputDirectories = m_ninjaResolverSettings.AdditionalOutputDirectories,
+                        AllowWritableSourceDirectory = m_ninjaResolverSettings.AllowWritableSourceDirectory,
+                    }, sharedState, project.Name, graph.DirectoryImports[project], project.DirectoryOutputs, project.SourceDirectories));
+            }
+
+            foreach (var (node, project) in graph.Nodes)
+            {
+                if (!constructors[project].TrySchedulePip(node, out _))
+                {
+                    Tracing.Logger.Log.InvalidResolverSettings(m_context.LoggingContext,
+                        m_ninjaResolverSettings.Location(m_context.PathTable),
+                        $"Failed to schedule stitched Ninja rule '{node.Rule}'. See the preceding pip diagnostics.");
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <inheritdoc/>

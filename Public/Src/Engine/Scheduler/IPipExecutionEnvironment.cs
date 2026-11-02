@@ -132,7 +132,7 @@ namespace BuildXL.Scheduler
         /// Returns whether the directory artifact represents a source sealed directory. If that's the case, returns the patterns and type of
         /// the source sealed.
         /// </summary>
-        bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns);
+        bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions);
 
         /// <summary>
         /// Returns the directory kind of the given directory artifact

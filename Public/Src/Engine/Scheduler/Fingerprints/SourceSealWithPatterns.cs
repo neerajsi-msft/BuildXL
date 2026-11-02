@@ -6,6 +6,7 @@ using BuildXL.Native.IO;
 using BuildXL.Utilities;
 using BuildXL.Utilities.Core;
 using BuildXL.Utilities.Collections;
+using BuildXL.Pips.Operations;
 
 namespace BuildXL.Scheduler.Fingerprints
 {
@@ -29,22 +30,26 @@ namespace BuildXL.Scheduler.Fingerprints
         /// </summary>
         public readonly bool IsTopDirectoryOnly;
 
+        /// <summary>Entries not authorized by this source seal.</summary>
+        public readonly SourceSealExclusions Exclusions;
+
         /// <summary>
         /// Constructor
         /// </summary>
-        public SourceSealWithPatterns(AbsolutePath path, ReadOnlyArray<StringId> patterns, bool isTopDirectoryOnly)
+        public SourceSealWithPatterns(AbsolutePath path, ReadOnlyArray<StringId> patterns, bool isTopDirectoryOnly, SourceSealExclusions exclusions = null)
         {
             Contract.Requires(path.IsValid);
 
             Path = path;
             Patterns = patterns;
             IsTopDirectoryOnly = isTopDirectoryOnly;
+            Exclusions = exclusions ?? SourceSealExclusions.Empty;
         }
 
         /// <summary>
         /// Check whether the source seal directory contains the given child path based on the wildcard patterns
         /// </summary>
-        public bool Contains(PathTable pathTable, AbsolutePath childPath, bool? isTopDirectoryOnlyOverride = default)
+        public bool Contains(PathTable pathTable, AbsolutePath childPath, bool? isTopDirectoryOnlyOverride = default, bool allowExactExcludedProbe = false)
         {
 #if PLATFORM_WIN
             Contract.Requires(pathTable != null);
@@ -69,6 +74,11 @@ namespace BuildXL.Scheduler.Fingerprints
             }
 
             if (!checkPatterns)
+            {
+                return false;
+            }
+
+            if (Exclusions.Contains(pathTable, Path, childPath, allowExactExcludedProbe))
             {
                 return false;
             }

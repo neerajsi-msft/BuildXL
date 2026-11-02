@@ -124,7 +124,8 @@ namespace BuildXL.Pips
                         seal.Patterns,
                         seal.IsComposite,
                         seal.Scrub,
-                        seal.ContentFilter);
+                        seal.ContentFilter,
+                        seal.SourceExclusions);
                     break;
                 default:
                     mutable = new MutablePipState(pip.PipType, pip.SemiStableHash, default(PageableStoreId));
@@ -437,6 +438,7 @@ namespace BuildXL.Pips
 
         internal readonly AbsolutePath DirectoryRoot;
         internal readonly ReadOnlyArray<StringId> Patterns;
+        internal readonly SourceSealExclusions SourceExclusions;
 
         private readonly byte m_packedState;
 
@@ -472,11 +474,13 @@ namespace BuildXL.Pips
             ReadOnlyArray<StringId> patterns,
             bool isComposite,
             bool scrub,
-            SealDirectoryContentFilter? contentFilter)
+            SealDirectoryContentFilter? contentFilter,
+            SourceSealExclusions sourceExclusions)
             : base(piptype, semiStableHash, storeId)
         {
             DirectoryRoot = directoryRoot;
             Patterns = patterns;
+            SourceExclusions = sourceExclusions;
 
             byte packed = (byte)((byte)sealDirectoryKind << SealDirectoryKindShift);
             packed |= isComposite ? (byte)SealFlags.IsComposite : (byte)0;
@@ -497,6 +501,7 @@ namespace BuildXL.Pips
             writer.Write(DirectoryRoot);
             writer.Write(m_packedState);
             writer.Write(Patterns, (w, v) => w.Write(v));
+            SourceExclusions.Serialize(writer);
             if ((m_packedState & (byte)SealFlags.HasContentFilter) != 0)
             {
                 // Write unconditionally on the same HasContentFilter bit that Deserialize checks, so the two
@@ -512,6 +517,7 @@ namespace BuildXL.Pips
             var directoryRoot = reader.ReadAbsolutePath();
             var packed = reader.ReadByte();
             var patterns = reader.ReadReadOnlyArray(reader1 => reader1.ReadStringId());
+            var sourceExclusions = SourceSealExclusions.Deserialize(reader);
 
             var sealDirectoryKind = (SealDirectoryKind)(packed >> SealDirectoryKindShift);
             var isComposite = (packed & (byte)SealFlags.IsComposite) != 0;
@@ -535,7 +541,8 @@ namespace BuildXL.Pips
                 patterns,
                 isComposite,
                 scrub,
-                contentFilter);
+                contentFilter,
+                sourceExclusions);
         }
     }
 }

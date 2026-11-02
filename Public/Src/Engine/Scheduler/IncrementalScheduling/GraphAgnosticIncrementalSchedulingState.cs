@@ -191,6 +191,8 @@ namespace BuildXL.Scheduler.IncrementalScheduling
         /// </summary>
         private HashSet<AbsolutePath> m_allDirectories;
 
+        private List<SourceSealWithPatterns> m_sourceDirectoriesWithExclusions;
+
         /// <summary>
         /// Nodes to be dirtied and non-materialized.
         /// </summary>
@@ -603,11 +605,24 @@ namespace BuildXL.Scheduler.IncrementalScheduling
 
             m_topOnlyDirectories = new HashSet<AbsolutePath>();
             m_allDirectories = new HashSet<AbsolutePath>();
+            m_sourceDirectoriesWithExclusions = new List<SourceSealWithPatterns>();
 
             foreach (var directoryArtifact in PipGraph.AllSealDirectories)
             {
                 var node = PipGraph.GetSealedDirectoryNode(directoryArtifact);
                 var kind = PipGraph.PipTable.GetSealDirectoryKind(node.ToPipId());
+                if (kind.IsSourceSeal())
+                {
+                    var exclusions = PipGraph.PipTable.GetSourceSealDirectoryExclusions(node.ToPipId());
+                    if (!exclusions.IsEmpty)
+                    {
+                        m_sourceDirectoriesWithExclusions.Add(new SourceSealWithPatterns(
+                            directoryArtifact.Path, PipGraph.PipTable.GetSourceSealDirectoryPatterns(node.ToPipId()),
+                            kind == SealDirectoryKind.SourceTopDirectoryOnly, exclusions));
+                        continue;
+                    }
+                }
+
                 var set = kind == SealDirectoryKind.SourceTopDirectoryOnly
                     ? m_topOnlyDirectories
                     : (kind == SealDirectoryKind.SourceAllDirectories ? m_allDirectories : null);
@@ -619,6 +634,14 @@ namespace BuildXL.Scheduler.IncrementalScheduling
         private bool IsReadOnlyDirectory(AbsolutePath path)
         {
             Contract.Requires(m_topOnlyDirectories != null && m_allDirectories != null);
+
+            foreach (var seal in m_sourceDirectoriesWithExclusions)
+            {
+                if (seal.Path == path || seal.Contains(PipGraphPathTable, path, allowExactExcludedProbe: true))
+                {
+                    return true;
+                }
+            }
 
             if (m_topOnlyDirectories.Count > 0 && m_topOnlyDirectories.Contains(path))
             {

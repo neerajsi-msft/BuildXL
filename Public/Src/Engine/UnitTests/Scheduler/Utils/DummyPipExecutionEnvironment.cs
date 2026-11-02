@@ -465,10 +465,11 @@ namespace Test.BuildXL.Scheduler.Utils
         }
 
         /// <inheritdoc />
-        public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns)
+        public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions)
         {
             Contract.Requires(directoryArtifact.IsValid);
             patterns = ReadOnlyArray<StringId>.Empty;
+            exclusions = SourceSealExclusions.Empty;
             if (m_knownSealedSourceDirectoriesAllDirectories.Contains(directoryArtifact.Path))
             {
                 allDirectories = true;
@@ -691,9 +692,9 @@ namespace Test.BuildXL.Scheduler.Utils
         {
             sourceSealWithPatterns = default;
 
-            if (IsSourceSealedDirectory(directory, out bool allDirectories, out ReadOnlyArray<StringId> patterns))
+            if (IsSourceSealedDirectory(directory, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out var exclusions))
             {
-                sourceSealWithPatterns = new SourceSealWithPatterns(directory.Path, patterns, !allDirectories);
+                sourceSealWithPatterns = new SourceSealWithPatterns(directory.Path, patterns, !allDirectories, exclusions);
                 return true;
             }
 

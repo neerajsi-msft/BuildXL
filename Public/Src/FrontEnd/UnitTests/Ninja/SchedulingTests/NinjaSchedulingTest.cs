@@ -11,6 +11,12 @@ using BuildXL.Utilities.Configuration.Mutable;
 using Test.BuildXL.FrontEnd.Ninja.Infrastructure;
 using Test.BuildXL.TestUtilities.Xunit;
 using Xunit;
+using BuildXL.FrontEnd.Ninja;
+using BuildXL.FrontEnd.Ninja.Serialization;
+using BuildXL.Utilities.Configuration.Resolvers;
+using BuildXL.Pips.Operations;
+using Test.BuildXL.FrontEnd.Core;
+using static Test.BuildXL.TestUtilities.TestEnv;
 
 namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
 {
@@ -19,6 +25,61 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
         public NinjaSchedulingTest(ITestOutputHelper output)
             : base(output)
         {
+        }
+
+        [Fact]
+        public void SourceSealsCarryExclusionsAndAreSharedByProjectProcesses()
+        {
+            var sourceRoot = TestPath.Combine(PathTable, "sources");
+            var settings = new NinjaResolverSettings
+            {
+                SourceDirectories = new[] { new NinjaSourceDirectorySettings
+                {
+                    Root = sourceRoot,
+                    ExcludedPaths = new[] { RelativePath.Create(PathTable.StringTable, "private/state") },
+                    ExcludedNames = new[] { PathAtom.Create(PathTable.StringTable, ".git") },
+                } },
+            };
+            var first = CreateNinjaNode(outputs: Paths("one.out"));
+            var second = CreateNinjaNode(outputs: Paths("two.out"));
+            var result = Start(settings).AddAll(first, second).ScheduleAll().AssertSuccess();
+            var seal = Assert.Single(Assert.IsType<TestPipGraph>(result.PipGraph)
+                .RetrieveScheduledPips().OfType<SealDirectory>());
+
+            Assert.Equal(SealDirectoryKind.SourceAllDirectories, seal.Kind);
+            Assert.Single(seal.SourceExclusions.Paths);
+            Assert.Single(seal.SourceExclusions.Names);
+            Assert.Contains(result.RetrieveSuccessfulProcess(first).DirectoryDependencies, directory => directory.Path == sourceRoot);
+            Assert.Contains(result.RetrieveSuccessfulProcess(second).DirectoryDependencies, directory => directory.Path == sourceRoot);
+            Assert.False(result.RetrieveSuccessfulProcess(first).AllowUndeclaredSourceReads);
+            Assert.False(result.RetrieveSuccessfulProcess(second).AllowUndeclaredSourceReads);
+
+            var remappedPaths = new PathTable();
+            var remapped = new NinjaResolverSettings(settings, new PathRemapper(PathTable, remappedPaths));
+            var source = Assert.Single(remapped.SourceDirectories);
+            Assert.Equal(sourceRoot.ToString(PathTable), source.Root.ToString(remappedPaths));
+            Assert.Equal("private/state", Assert.Single(source.ExcludedPaths).ToString(remappedPaths.StringTable).Replace('\\', '/'));
+            Assert.Equal(".git", Assert.Single(source.ExcludedNames).ToString(remappedPaths.StringTable));
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void SourceSealsReplaceLegacyGitUntracking(bool useSourceSeal)
+        {
+            var git = TestPath.Combine(PathTable, ".git");
+            FileSystem.CreateDirectory(git);
+            var settings = new NinjaResolverSettings
+            {
+                SourceDirectories = useSourceSeal
+                    ? new[] { new NinjaSourceDirectorySettings { Root = TestPath } }
+                    : null,
+            };
+            var node = CreateNinjaNode(outputs: Paths("one.out"));
+            var process = Start(settings).Add(node).ScheduleAll().AssertSuccess().RetrieveSuccessfulProcess(node);
+
+            Assert.Equal(!useSourceSeal, process.AllowUndeclaredSourceReads);
+            Assert.Equal(!useSourceSeal, process.UntrackedScopes.Contains(git));
         }
 
         [Fact]
@@ -52,6 +113,169 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
         }
 
         [Fact]
+        public void AdditionalOutputDirectoriesAreRemapped()
+        {
+            var oldPaths = new PathTable();
+            var newPaths = new PathTable();
+            AbsolutePath.Create(newPaths, Path.GetFullPath("unrelated"));
+            var absolute = Path.GetFullPath("generated");
+            var relative = Path.Combine("extra", "generated");
+            var settings = new NinjaResolverSettings
+            {
+                AdditionalOutputDirectories = new[]
+                {
+                    new DiscriminatingUnion<AbsolutePath, RelativePath>(AbsolutePath.Create(oldPaths, absolute)),
+                    new DiscriminatingUnion<AbsolutePath, RelativePath>(RelativePath.Create(oldPaths.StringTable, relative)),
+                },
+            };
+
+            var remapped = new NinjaResolverSettings(settings, new PathRemapper(oldPaths, newPaths));
+
+            XAssert.AreEqual(AbsolutePath.Create(newPaths, absolute),
+                Assert.IsType<AbsolutePath>(remapped.AdditionalOutputDirectories[0].GetValue()));
+            XAssert.AreEqual(RelativePath.Create(newPaths.StringTable, relative),
+                Assert.IsType<RelativePath>(remapped.AdditionalOutputDirectories[1].GetValue()));
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ProjectRootOutputHonorsSourceWritePolicy(bool writable)
+        {
+            var settings = new NinjaResolverSettings
+            {
+                AllowWritableSourceDirectory = writable,
+                AdditionalOutputDirectories = new[]
+                {
+                    new DiscriminatingUnion<AbsolutePath, RelativePath>(TestPath.Combine(PathTable, "outputs")),
+                },
+            };
+            var node = CreateNinjaNode(outputs: new[]
+            {
+                TestPath.Combine(PathTable, "outputs").Combine(PathTable, "product"),
+            }.ToReadOnlySet());
+            var process = Start(settings).Add(node).ScheduleAll().RetrieveSuccessfulProcess(node);
+
+            Assert.Equal(writable, process.DirectoryOutputs.Any(directory => directory.Path == TestPath));
+            Assert.Contains(process.DirectoryOutputs, directory => directory.Path == TestPath.Combine(PathTable, "outputs"));
+            Assert.Equal(writable, new NinjaResolverSettings(settings, new PathRemapper(PathTable, PathTable)).AllowWritableSourceDirectory);
+        }
+
+        private NinjaProject Project(string name, params NinjaNode[] nodes) =>
+            new NinjaProject(new NinjaProjectSettings
+            {
+                Name = name,
+                Root = TestPath,
+                Environment = new Dictionary<string, EnvironmentData>(),
+            }, PathTable) { Nodes = nodes };
+
+        [Fact]
+        public void StitchingSortsCrossGraphDependencies()
+        {
+            var producer = CreateNinjaNode(rule: "producer", outputs: Paths("header.h"));
+            var consumer = CreateNinjaNode(rule: "consumer", inputs: Paths("header.h"), outputs: Paths("consumer.o"));
+
+            var producerProject = Project("producer", producer);
+            var consumerProject = Project("consumer", consumer);
+            Assert.True(NinjaGraphStitcher.TryStitch(new[] { consumerProject, producerProject },
+                PathTable, out var graph, out var error), error);
+            Assert.Equal(new[] { (producer, producerProject), (consumer, consumerProject) }, graph.Nodes);
+        }
+
+        [Fact]
+        public void StitchingRetainsValidatedDirectoryBindings()
+        {
+            var root = TestPath.Combine(PathTable, "sdk");
+            var first = CreateNinjaNode(outputs: new[] { root.Combine(PathTable, "first.h") }.ToReadOnlySet());
+            var second = CreateNinjaNode(outputs: new[] { root.Combine(PathTable, "second.h") }.ToReadOnlySet());
+            var consumer = CreateNinjaNode(outputs: Paths("consumer.o"));
+            var producerProject = new NinjaProject(new NinjaProjectSettings
+            {
+                Name = "producer",
+                Root = TestPath,
+                Environment = new Dictionary<string, EnvironmentData>(),
+                DirectoryExports = new[] { root },
+            }, PathTable) { Nodes = new[] { first, second } };
+            var consumerProject = new NinjaProject(new NinjaProjectSettings
+            {
+                Name = "consumer",
+                Root = TestPath,
+                Environment = new Dictionary<string, EnvironmentData>(),
+                DirectoryImports = new Dictionary<string, IReadOnlyList<AbsolutePath>>
+                {
+                    ["PrOdUcEr"] = new[] { root },
+                },
+            }, PathTable) { Nodes = new[] { consumer } };
+
+            Assert.True(NinjaGraphStitcher.TryStitch(new[] { consumerProject, producerProject },
+                PathTable, out var graph, out var error), error);
+            Assert.Equal(new[] { (first, producerProject), (second, producerProject), (consumer, consumerProject) }, graph.Nodes);
+            Assert.Equal(new[] { root }, graph.DirectoryImports[consumerProject]["producer"]);
+            Assert.Empty(graph.DirectoryImports[producerProject]);
+            Assert.Equal(first.Outputs.Concat(second.Outputs).OrderBy(path => path.RawValue),
+                graph.DirectoryMembers[("producer", root)].OrderBy(path => path.RawValue));
+        }
+
+        [Fact]
+        public void StitchingRejectsDuplicateOutputs()
+        {
+            var first = CreateNinjaNode(rule: "first", outputs: Paths("header.h"));
+            var second = CreateNinjaNode(rule: "second", outputs: Paths("header.h"));
+
+            Assert.False(NinjaGraphStitcher.TryStitch(new[] { Project("first-project", first), Project("second-project", second) },
+                PathTable, out _, out var error));
+            Assert.Contains("Duplicate Ninja producer", error);
+            Assert.Contains("first-project", error);
+            Assert.Contains("second-project", error);
+        }
+
+        [Fact]
+        public void StitchingRejectsCrossGraphCycles()
+        {
+            var first = CreateNinjaNode(rule: "first", inputs: Paths("second.out"), outputs: Paths("first.out"));
+            var second = CreateNinjaNode(rule: "second", inputs: Paths("first.out"), outputs: Paths("second.out"));
+
+            Assert.False(NinjaGraphStitcher.TryStitch(new[] { Project("first-project", first), Project("second-project", second) },
+                PathTable, out _, out var error));
+            Assert.Contains("Cycle", error);
+            Assert.Contains("first-project", error);
+            Assert.Contains("second-project", error);
+        }
+
+        [Fact]
+        public void GroupedProjectPathsAreRemapped()
+        {
+            var newPaths = new PathTable();
+            AbsolutePath.Create(newPaths, Path.GetFullPath("unrelated"));
+            var settings = new NinjaResolverSettings
+            {
+                Projects = new[] { new NinjaProjectSettings
+                {
+                    Name = "project",
+                    Root = TestPath,
+                    SpecFile = TestPath.Combine(PathTable, "nested").Combine(PathTable, "build.ninja"),
+                    Targets = new[] { "all" },
+                    Environment = new Dictionary<string, EnvironmentData>(),
+                    DirectoryExports = new[] { TestPath.Combine(PathTable, "export") },
+                    DirectoryImports = new Dictionary<string, IReadOnlyList<AbsolutePath>>
+                    {
+                        ["producer"] = new[] { TestPath.Combine(PathTable, "import") },
+                    },
+                } },
+            };
+
+            var remapped = new NinjaResolverSettings(settings, new PathRemapper(PathTable, newPaths));
+            Assert.Equal(TestPath.ToString(PathTable), remapped.Projects[0].Root.ToString(newPaths));
+            Assert.Equal(settings.Projects[0].SpecFile.ToString(PathTable), remapped.Projects[0].SpecFile.ToString(newPaths));
+            Assert.Equal("all", Assert.Single(remapped.Projects[0].Targets));
+            Assert.Empty(remapped.Projects[0].Environment);
+            Assert.Equal(settings.Projects[0].DirectoryExports[0].ToString(PathTable),
+                Assert.Single(remapped.Projects[0].DirectoryExports).ToString(newPaths));
+            Assert.Equal(settings.Projects[0].DirectoryImports["producer"][0].ToString(PathTable),
+                Assert.Single(remapped.Projects[0].DirectoryImports["producer"]).ToString(newPaths));
+        }
+
+        [FactIfSupported(requiresWindowsBasedOperatingSystem: true)]
         public void CorrectSeparationOfQuotedExecutable()
         {
             var quotedBogus = $@"""{BogusExecutable}""";
@@ -64,7 +288,7 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
             XAssert.AreEqual(options, process.Arguments.ToString(PathTable));
         }
 
-        [Fact]
+        [FactIfSupported(requiresWindowsBasedOperatingSystem: true)]
         public void CorrectSeparationOfExecutable()
         {
             var options = "--great --options";
@@ -76,7 +300,7 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
             XAssert.AreEqual(options, process.Arguments.ToString(PathTable));
         }
 
-        [Theory]
+        [TheoryIfSupported(requiresWindowsBasedOperatingSystem: true)]
         [InlineData("/SomeArg /ZI", "/SomeArg /Z7 ")]
         [InlineData("/SomeArg /Zi", "/SomeArg /Z7 ")]
         [InlineData("/SomeArg /Zi /AnotherArg", "/SomeArg /Z7 /AnotherArg")]

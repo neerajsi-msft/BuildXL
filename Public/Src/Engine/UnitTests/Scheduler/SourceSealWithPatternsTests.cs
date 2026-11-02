@@ -6,6 +6,7 @@ using Test.BuildXL.TestUtilities.Xunit;
 using Xunit;
 using BuildXL.Scheduler.Fingerprints;
 using BuildXL.Utilities.Collections;
+using BuildXL.Pips.Operations;
 
 namespace Test.BuildXL.Scheduler
 {
@@ -66,6 +67,56 @@ namespace Test.BuildXL.Scheduler
             AssertTrue(!sourceSeal2.Contains(pt, nestedf1, isTopDirectoryOnlyOverride: false));
             AssertTrue(sourceSeal2.Contains(pt, nestedf2, isTopDirectoryOnlyOverride: false));
 
+        }
+
+        [Fact]
+        public void ExclusionsAreComponentAwareAndDoNotAuthorizeSubtreeProbes()
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var exclusions = new SourceSealExclusions(
+                ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, "private/state") }),
+                ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(pt.StringTable, ".git") }));
+            var seal = new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false, exclusions);
+
+            foreach (var path in new[] { ".git", "nested/.git", "private/state" })
+            {
+                var excluded = root.Combine(pt, RelativePath.Create(pt.StringTable, path));
+                Assert.False(seal.Contains(pt, excluded));
+                Assert.True(seal.Contains(pt, excluded, allowExactExcludedProbe: true));
+                var child = excluded.Combine(pt, "config");
+                Assert.False(seal.Contains(pt, child));
+                Assert.False(seal.Contains(pt, child, allowExactExcludedProbe: true));
+            }
+
+            foreach (var path in new[] { "public/file", ".github", "nested/.gitignore", "private/stateful", "other/private/state" })
+            {
+                Assert.True(seal.Contains(pt, root.Combine(pt, RelativePath.Create(pt.StringTable, path))));
+            }
+        }
+
+        [Fact]
+        public void ExclusionsRoundTrip()
+        {
+            var pt = new PathTable();
+            var exclusions = new SourceSealExclusions(
+                ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, "private/state") }),
+                ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(pt.StringTable, ".git") }));
+            using (var stream = new System.IO.MemoryStream())
+            {
+                using (var writer = new BuildXLWriter(false, stream, true, false))
+                {
+                    exclusions.Serialize(writer);
+                }
+
+                stream.Position = 0;
+                using (var reader = new BuildXLReader(false, stream, false))
+                {
+                    var restored = SourceSealExclusions.Deserialize(reader);
+                    Assert.Equal(exclusions.Paths.ToArray(), restored.Paths.ToArray());
+                    Assert.Equal(exclusions.Names.ToArray(), restored.Names.ToArray());
+                }
+            }
         }
 
         [Fact]

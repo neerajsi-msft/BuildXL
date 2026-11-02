@@ -144,6 +144,9 @@ namespace BuildXL.Pips
         /// </summary>
         ReadOnlyArray<StringId> GetSourceSealDirectoryPatterns(PipId pipId);
 
+        /// <summary>Gets source seal exclusions without hydrating the pip.</summary>
+        SourceSealExclusions GetSourceSealDirectoryExclusions(PipId pipId);
+
         /// <summary>
         /// Gets the pip semistable hash without hydrating the pip.
         /// </summary>

@@ -30,6 +30,10 @@ namespace BuildXL.Pips.Operations
         [PipCaching(FingerprintingRole = FingerprintingRole.Semantic)]
         public ReadOnlyArray<StringId> Patterns { get; }
 
+        /// <summary>Paths and entry names not authorized by this source seal.</summary>
+        [PipCaching(FingerprintingRole = FingerprintingRole.Semantic)]
+        public SourceSealExclusions SourceExclusions { get; }
+
         /// <summary>
         /// Root path that is sealed by this pip. Equivalent to <see cref="Directory"/>, except this is available before <see cref="IsInitialized"/> is set.
         /// </summary>
@@ -100,7 +104,8 @@ namespace BuildXL.Pips.Operations
             PipProvenance provenance,
             ReadOnlyArray<StringId> tags,
             ReadOnlyArray<StringId> patterns,
-            bool scrub = false)
+            bool scrub = false,
+            SourceSealExclusions sourceExclusions = null)
         {
             Contract.Requires(directoryRoot.IsValid);
             Contract.Requires(contents.IsValid);
@@ -109,6 +114,7 @@ namespace BuildXL.Pips.Operations
             Contract.Requires(provenance != null);
             Contract.Requires(!(patterns.IsValid && patterns.Length != 0) || kind.IsSourceSeal(), "If patterns are provided, it must be a source seal directory");
             Contract.Requires(!scrub || kind.IsFull(), "Only scrub fully seal directory");
+            Contract.Requires(sourceExclusions == null || sourceExclusions.IsEmpty || kind.IsSourceSeal());
             Contract.Requires(outputDirectoryContents.Length == 0 || kind.IsFull(), "Output directory content is only available for fully sealed directories");
 
             Provenance = provenance;
@@ -120,6 +126,7 @@ namespace BuildXL.Pips.Operations
             Scrub = scrub;
 
             Patterns = patterns;
+            SourceExclusions = sourceExclusions ?? SourceSealExclusions.Empty;
 
             // Initialization required before this pip is usable or serializable.
             m_partialSealId = null;
@@ -199,7 +206,8 @@ namespace BuildXL.Pips.Operations
                 reader.ReadPipProvenance(),
                 reader.ReadReadOnlyArray(reader1 => reader1.ReadStringId()),
                 reader.ReadReadOnlyArray(reader1 => reader1.ReadStringId()),
-                reader.ReadBoolean());
+                reader.ReadBoolean(),
+                SourceSealExclusions.Deserialize(reader));
 
             directory.SetDirectoryArtifact(artifact);
             Contract.Assume(directory.IsInitialized && directory.Directory == artifact);
@@ -220,6 +228,7 @@ namespace BuildXL.Pips.Operations
             writer.Write(Tags, (w, v) => w.Write(v));
             writer.Write(Patterns, (w, v) => w.Write(v));
             writer.Write(Scrub);
+            SourceExclusions.Serialize(writer);
         }
 
         #endregion

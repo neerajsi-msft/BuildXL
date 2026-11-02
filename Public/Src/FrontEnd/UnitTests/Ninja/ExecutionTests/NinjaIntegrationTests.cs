@@ -15,6 +15,7 @@ using Xunit;
 using BuildXL.Engine;
 using BuildXL.Utilities.Core;
 using Test.BuildXL.TestUtilities.Xunit;
+using Test.BuildXL.FrontEnd.Ninja.Infrastructure;
 
 namespace Test.BuildXL.FrontEnd.Ninja
 {
@@ -39,6 +40,90 @@ namespace Test.BuildXL.FrontEnd.Ninja
             var config = BuildAndGetConfiguration(CreateHelloWorldProject(OutputFileName));
             var engineResult = RunEngineWithConfig(config);
             Assert.True(engineResult.IsSuccess);
+        }
+
+        [TheoryIfSupported(requiresLinuxBasedOperatingSystem: true)]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public void SourceSealsEnforceExclusionsInBothResolverForms(bool grouped, bool excluded)
+        {
+            const string project = @"
+                root: d`source`,
+                environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
+                sourceDirectories: [{ root: d`source`, excludedNames: [a`.git`] }],
+            ";
+            var projectSettings = grouped ? $"projects: [{{ name: 'source', {project} }}]," : project;
+            var config = Build()
+                .Configuration($@"
+config({{
+    resolvers: [{{
+        kind: 'Ninja', moduleName: 'SealedSource',
+        allowWritableSourceDirectory: false,
+        {projectSettings}
+        additionalOutputDirectories: [p`out`],
+    }}],
+    mounts: [{{
+        name: a`Sources`, path: p`source`, isWritable: false,
+        isReadable: true, trackSourceFileChanges: true,
+    }}, {{
+        name: a`Outputs`, path: p`out`, isWritable: true, isReadable: true,
+    }}],
+}});")
+                .AddSpec(Path.Combine(SourceRoot, "source", "build.ninja"),
+                    "rule copy\n  command = mkdir -p ../out && cat " +
+                    (excluded ? ".git/config" : "input.txt") +
+                    " > $out\nbuild ../out/result.txt: copy\ndefault ../out/result.txt\n")
+                .AddSpec(Path.Combine(SourceRoot, "source", "input.txt"), "allowed")
+                .AddSpec(Path.Combine(SourceRoot, "source", ".git", "config"), "excluded")
+                .PersistSpecsAndGetConfiguration();
+            ((CommandLineConfiguration)config).Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = false;
+
+            var result = RunEngineWithConfig(config);
+            Assert.Equal(!excluded, result.IsSuccess);
+            if (excluded)
+            {
+                AssertVerboseEventLogged(global::BuildXL.Processes.Tracing.LogEventId.PipProcessDisallowedFileAccess, allowMore: true);
+                AssertVerboseEventLogged(global::BuildXL.Scheduler.Tracing.LogEventId.DependencyViolationMissingSourceDependency, allowMore: true);
+                AssertWarningEventLogged(global::BuildXL.Scheduler.Tracing.LogEventId.ProcessNotStoredToCacheDueToFileMonitoringViolations);
+                AssertErrorEventLogged(global::BuildXL.Scheduler.Tracing.LogEventId.FileMonitoringError);
+            }
+            else
+            {
+                var process = Assert.Single(result.EngineState.PipGraph.RetrievePipsOfType(PipType.Process).OfType<Process>());
+                Assert.False(process.AllowUndeclaredSourceReads);
+                Assert.Single(process.DirectoryDependencies);
+                Assert.Equal("allowed", File.ReadAllText(Path.Combine(SourceRoot, "out", "result.txt")));
+            }
+        }
+
+        [Fact]
+        public void SpecFileCanBeInOutputSubdirectory()
+        {
+            var config = BuildAndGetConfiguration(CreateWriteReadProject("first.txt", "second.txt"),
+                specFile: $"{DefaultProjectRoot}/generated/build.ninja");
+
+            var engineResult = RunEngineWithConfig(config);
+
+            Assert.True(engineResult.IsSuccess);
+            Assert.True(File.Exists(Path.Combine(SourceRoot, DefaultProjectRoot, "second.txt")));
+            Assert.False(File.Exists(Path.Combine(SourceRoot, DefaultProjectRoot, "generated", "second.txt")));
+        }
+
+        [TheoryIfSupported(requiresLinuxBasedOperatingSystem: true)]
+        [InlineData("printf '%s' 'hello world' > $out", "hello world")]
+        [InlineData("printf '%s' `printf 'hello world'` | tr -d ' ' > $out", "helloworld")]
+        [InlineData("/bin/bash -c \"printf '%s' \\`printf 'hello world'\\` > $out\"", "helloworld")]
+        public void LinuxCommandsUseNinjaShellSemantics(string command, string expected)
+        {
+            var spec = new NinjaSpec($"rule r\n  command = {command}\nbuild {OutputFileName}: r\n", new[] { OutputFileName });
+            var config = BuildAndGetConfiguration(spec);
+            var engineResult = RunEngineWithConfig(config);
+
+            Assert.True(engineResult.IsSuccess);
+            var actual = File.ReadAllText(Path.Combine(SourceRoot, DefaultProjectRoot, OutputFileName));
+            Assert.Equal(expected, actual);
         }
 
         [Fact]

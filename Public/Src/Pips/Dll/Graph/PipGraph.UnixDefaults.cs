@@ -85,6 +85,8 @@ namespace BuildXL.Pips.Graph
                         UnixPaths.TmpDir,
                         UnixPaths.EtcOsRelease
                     }
+                    // WSL's /etc/resolv.conf points outside /etc; this is OS DNS configuration, not a build input.
+                    .Concat(If(OperatingSystemHelper.IsLinuxOS, "/mnt/wsl/resolv.conf"))
                     .Concat(IfMacOs(
                         MacPaths.UserKeyChainsDb,
                         MacPaths.UserKeyChains,
@@ -115,10 +117,12 @@ namespace BuildXL.Pips.Graph
                         //     deterministic---is executed multiple times on same inputs, the set of 
                         //     dynamically loaded libraries is not necessarily going to stay the same.
                         UnixPaths.UsrLib,
+                        UnixPaths.UsrLib32,
                         UnixPaths.UsrLib64,
                         UnixPaths.UsrLocalLib64,
                         // Modern Linux distributions link /lib to /usr/lib, so this is safe to untrack
                         UnixPaths.Lib,
+                        UnixPaths.Lib32,
                         UnixPaths.LibLinuxGnu,
                         UnixPaths.Lib64,
                         UnixPaths.Run,

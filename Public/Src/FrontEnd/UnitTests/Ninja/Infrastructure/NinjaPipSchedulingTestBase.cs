@@ -145,14 +145,15 @@ namespace Test.BuildXL.FrontEnd.Ninja.Infrastructure
                         UserDefinedEnvironment = environment,
                         UserDefinedPassthroughVariables = passthroughEnv,
                         UntrackingSettings = resolverSettings,
-                        AdditionalOutputDirectories = resolverSettings.AdditionalOutputDirectories
-                    });
+                        AdditionalOutputDirectories = resolverSettings.AdditionalOutputDirectories,
+                        AllowWritableSourceDirectory = resolverSettings.AllowWritableSourceDirectory,
+                    }, sourceDirectories: resolverSettings.SourceDirectories);
 
                 var schedulingResults = new Dictionary<NinjaNode, (bool, Process)>();
 
                 foreach (var node in nodes)
                 {
-                    var result = pipConstructor.TrySchedulePip(node, qualifierId, out Process process);
+                    var result = pipConstructor.TrySchedulePip(node, out Process process);
                     schedulingResults[node] = (result, process);
                 }
 

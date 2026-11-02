@@ -12,6 +12,12 @@ namespace BuildXL.Utilities.Configuration
     public interface INinjaResolverSettings : IProjectGraphResolverSettings
     {
         /// <summary>
+        /// Optional group of graphs to stitch by declared input/output paths.
+        /// Mutually exclusive with resolver-level Root, SpecFile, Targets and Environment.
+        /// </summary>
+        IReadOnlyList<INinjaProjectSettings> Projects { get; }
+
+        /// <summary>
         /// Targets to resolve
         /// </summary>
         IReadOnlyList<string> Targets { get; }
@@ -20,5 +26,8 @@ namespace BuildXL.Utilities.Configuration
         /// The build file, typically build.ninja. If null, "{ProjectRoot}/build.ninja" is used
         /// </summary>
         AbsolutePath SpecFile { get; }
+
+        /// <summary>Recursive source seals for the single-project form.</summary>
+        IReadOnlyList<INinjaSourceDirectorySettings> SourceDirectories { get; }
     }
 }

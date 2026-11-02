@@ -96,6 +96,18 @@ namespace Transformer {
         /** Optional file pattern to match in this sealed source directory. */
         patterns?: string[],
 
+        /** Root-relative file or subtree paths that this seal does not authorize.
+         * Excluded entries remain visible in parent enumerations. Exact existence/type probes
+         * are allowed, but reads, enumeration of an excluded directory, and descendant probes are not.
+         * Other explicitly declared inputs can authorize an excluded path.
+         */
+        excludedPaths?: RelativePath[],
+
+        /** File or directory entry names excluded at every depth, e.g. [a`.git`].
+         * Has the same access and enumeration semantics as excludedPaths.
+         */
+        excludedNames?: PathAtom[],
+
         /** Optional options for which files to seal. The default is 'topDirectoryOnly' */
         include?: "topDirectoryOnly" | "allDirectories",
     }

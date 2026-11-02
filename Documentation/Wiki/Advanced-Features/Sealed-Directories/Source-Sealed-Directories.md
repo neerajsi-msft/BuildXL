@@ -15,3 +15,58 @@ Users can create two types of Source Sealed Directories, one that only allows th
 const sourceTop = Transformer.sealSourceDirectory(d`dir1`, SealSourceDirectoryOption.topDirectoryOnly);
 const sourceAll = Transformer.sealSourceDirectory(d`dir2`, SealSourceDirectoryOption.allDirectories);
 ```
+
+### Excluding files and subtrees
+
+The object form accepts `excludedPaths` (nonempty paths relative to the seal root)
+and `excludedNames` (entry names matched at every depth). Both exclude the entry
+itself and its entire subtree from the seal's read authorization:
+
+```ts
+const sources = Transformer.sealSourceDirectory({
+    root: d`repo`,
+    include: "allDirectories",
+    excludedPaths: [r`private/build-state`],
+    excludedNames: [a`.git`],
+});
+```
+
+These are component-aware literal matches, not wildcard or Gitignore patterns.
+For example, excluding `.git` also covers nested repositories and `.git` pointer
+files, but does not exclude `.github` or `.gitignore`.
+
+Exclusions do not hide filesystem entries. Enumerating an allowed parent still
+observes the excluded name, and adding, removing, or renaming that name affects
+the enumeration fingerprint. Changing contents below the excluded entry does not
+affect a process that only enumerates its parent.
+
+An exact existence/type probe of the excluded entry is allowed; reading it,
+enumerating an excluded directory, or probing any descendant is not authorized by
+this seal. On Linux eBPF, `TreatStatAsProbe=false` classifies `stat` as a read and
+therefore requires read authorization. It does not fingerprint every metadata
+field returned by `stat`.
+
+An exclusion restricts only this seal's grant: a separately declared file input
+or another directory input may authorize the same path. It is not a global deny,
+an untracked scope, or a mechanism for banning a particular executable.
+
+Ninja projects can declare equivalent recursive dependencies using
+`sourceDirectories`, either on a grouped project or on a single-project resolver:
+
+```ts
+sourceDirectories: [{
+    root: d`repo`,
+    excludedPaths: [r`private/build-state`],
+    excludedNames: [a`.git`],
+}],
+```
+
+Every executable node in that project consumes these seals. The roots must be
+under read-only mounts, as for DScript source seals. Ordinary Ninja file inputs
+remain explicit grants, including any explicitly listed excluded file.
+
+Declaring a nonempty `sourceDirectories` list opts that project into declared-input
+checking: it disables Ninja's legacy undeclared source reads and automatic Git
+untracking. Projects without source seals retain their previous behavior. Explicit
+user-configured untracked scopes remain untracked and should not overlap paths
+whose access must be checked.

@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using BuildXL.Pips;
 using BuildXL.Pips.Operations;
 using BuildXL.Utilities.Core;
+using BuildXL.Utilities;
+using BuildXL.Utilities.Collections;
 using Test.BuildXL.TestUtilities.Xunit;
 using Xunit;
 
@@ -98,8 +100,9 @@ namespace Test.BuildXL.Pips
         [Fact]
         public async Task FactoryPreservesEagerFormat()
         {
-            var pathTable = new PathTable();
-            var symbolTable = new SymbolTable(pathTable.StringTable);
+            var context = BuildXLContext.CreateInstanceForTesting();
+            var pathTable = context.PathTable;
+            var symbolTable = context.SymbolTable;
             using (var serialized = new MemoryStream())
             {
                 using (var table = new PipTable(pathTable, symbolTable, initialBufferSize: 1024, maxDegreeOfParallelism: 1, debug: false))
@@ -109,6 +112,7 @@ namespace Test.BuildXL.Pips
                         new HashSourceFile(
                             FileArtifact.CreateSourceFile(
                                 AbsolutePath.Create(pathTable, Path.Combine(Path.GetTempPath(), "source.txt")))));
+                    table.Add(2, CreateSourceSeal(context));
 
                     using (var writer = new BuildXLWriter(debug: false, serialized, leaveOpen: true, logStats: false))
                     {
@@ -128,6 +132,7 @@ namespace Test.BuildXL.Pips
                 {
                     Assert.IsType<PipTable>(table);
                     Assert.Equal(PipType.HashSourceFile, table.GetPipType(new PipId(1)));
+                    AssertSourceSealExclusions(table, new PipId(2), pathTable);
                 }
             }
         }
@@ -135,8 +140,9 @@ namespace Test.BuildXL.Pips
         [Fact]
         public async Task SerializesHydratesAndReloads()
         {
-            var pathTable = new PathTable();
-            var symbolTable = new SymbolTable(pathTable.StringTable);
+            var context = BuildXLContext.CreateInstanceForTesting();
+            var pathTable = context.PathTable;
+            var symbolTable = context.SymbolTable;
             string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
             string serializedPath = Path.Combine(directory, "PipTable");
             Directory.CreateDirectory(directory);
@@ -155,6 +161,7 @@ namespace Test.BuildXL.Pips
                         FileArtifact.CreateSourceFile(
                             AbsolutePath.Create(pathTable, Path.Combine(directory, "source.txt"))));
                     var pipId = table.Add(1, pip);
+                    table.Add(2, CreateSourceSeal(context));
 
                     table.StopBackgroundSerialization();
                     await table.WhenDone();
@@ -183,6 +190,7 @@ namespace Test.BuildXL.Pips
                     Assert.IsType<FileBackedPipTable>(table);
                     Assert.Equal(PipType.HashSourceFile, table.GetPipType(new PipId(1)));
                     Assert.Equal(new PipId(1), table.HydratePip(new PipId(1), PipQueryContext.Test).PipId);
+                    AssertSourceSealExclusions(table, new PipId(2), pathTable);
                     Assert.Equal(0, table.Size);
                 }
             }
@@ -198,6 +206,32 @@ namespace Test.BuildXL.Pips
                     Directory.Delete(directory);
                 }
             }
+        }
+
+        private static SealDirectory CreateSourceSeal(BuildXLContext context)
+        {
+            var root = AbsolutePath.Create(context.PathTable, Path.Combine(Path.GetTempPath(), "source-seal"));
+            var seal = new SealDirectory(
+                root,
+                CollectionUtilities.EmptySortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>(OrdinalFileArtifactComparer.Instance),
+                CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                SealDirectoryKind.SourceAllDirectories, PipProvenance.CreateDummy(context),
+                ReadOnlyArray<StringId>.Empty, ReadOnlyArray<StringId>.Empty,
+                sourceExclusions: new SourceSealExclusions(
+                    ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(context.StringTable, "private/state") }),
+                    ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(context.StringTable, ".git") })));
+            seal.SetDirectoryArtifact(new DirectoryArtifact(root, 1));
+            return seal;
+        }
+
+        private static void AssertSourceSealExclusions(IPipTable table, PipId pipId, PathTable pathTable)
+        {
+            var exclusions = table.GetSourceSealDirectoryExclusions(pipId);
+            Assert.Equal(RelativePath.Create(pathTable.StringTable, "private/state"), Assert.Single(exclusions.Paths));
+            Assert.Equal(PathAtom.Create(pathTable.StringTable, ".git"), Assert.Single(exclusions.Names));
+            var seal = Assert.IsType<SealDirectory>(table.HydratePip(pipId, PipQueryContext.Test));
+            Assert.Equal(exclusions.Paths.ToArray(), seal.SourceExclusions.Paths.ToArray());
+            Assert.Equal(exclusions.Names.ToArray(), seal.SourceExclusions.Names.ToArray());
         }
     }
 }

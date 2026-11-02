@@ -838,9 +838,10 @@ namespace Test.BuildXL.Scheduler
                     return m_harness.m_sealedDirectories[directoryArtifact];
                 }
 
-                public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns)
+                public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions)
                 {
                     patterns = ReadOnlyArray<StringId>.Empty;
+                    exclusions = SourceSealExclusions.Empty;
                     return m_harness.m_sealedSourceDirectories.TryGetValue(directoryArtifact, out allDirectories);
                 }
 

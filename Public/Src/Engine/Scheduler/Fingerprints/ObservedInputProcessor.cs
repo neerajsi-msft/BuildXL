@@ -224,15 +224,15 @@ namespace BuildXL.Scheduler.Fingerprints
                             {
                                 directoryDependencyContentsFilePaths.Add(f.Path);
                             }
-                            if (environment.IsSourceSealedDirectory(directoryDependency, out var allDirectories, out var patterns))
+                            if (environment.IsSourceSealedDirectory(directoryDependency, out var allDirectories, out var patterns, out var exclusions))
                             {
                                 if (allDirectories)
                                 {
-                                    sourceDirectoriesAllDirectories.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, false));
+                                    sourceDirectoriesAllDirectories.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, false, exclusions));
                                 }
                                 else
                                 {
-                                    sourceDirectoriesTopDirectoryOnly.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, true));
+                                    sourceDirectoriesTopDirectoryOnly.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, true, exclusions));
                                 }
                             }
                         }
@@ -258,10 +258,13 @@ namespace BuildXL.Scheduler.Fingerprints
 
                             // Check to see if the observation is under a topDirectoryOnly Sealed Source Directories
                             bool underSealedSource = false;
+                            var flags = target.GetObservationFlags(observations[i]);
+                            bool allowExactExcludedProbe = (flags & ObservationFlags.FileProbe) != 0
+                                && (flags & ObservationFlags.Enumeration) == 0;
                             for (int j = 0; j < sourceDirectoriesTopDirectoryOnly.Count && !underSealedSource; j++)
                             {
                                 var sourceSealWithPatterns = sourceDirectoriesTopDirectoryOnly[j];
-                                if (sourceSealWithPatterns.Contains(pathTable, path))
+                                if (sourceSealWithPatterns.Contains(pathTable, path, allowExactExcludedProbe: allowExactExcludedProbe))
                                 {
                                     underSealedSource = true;
                                     observationsUnderSourceSealDirectories.Add(i);
@@ -278,7 +281,7 @@ namespace BuildXL.Scheduler.Fingerprints
                             for (int j = 0; j < sourceDirectoriesAllDirectories.Count && !underSealedSource; j++)
                             {
                                 var sourceSealWithPatterns = sourceDirectoriesAllDirectories[j];
-                                if (sourceSealWithPatterns.Contains(pathTable, path))
+                                if (sourceSealWithPatterns.Contains(pathTable, path, allowExactExcludedProbe: allowExactExcludedProbe))
                                 {
                                     // Note the directories themselves are never part of the seal.
                                     underSealedSource = true;
@@ -534,7 +537,11 @@ namespace BuildXL.Scheduler.Fingerprints
                                     continue;
                                 }
                             }
-                            else if (type == ObservedInputType.FileContentRead || type == ObservedInputType.ExistingFileProbe)
+                            else if (type == ObservedInputType.FileContentRead || type == ObservedInputType.ExistingFileProbe
+                                || sourceDirectoriesTopDirectoryOnly.Concat(sourceDirectoriesAllDirectories).Any(
+                                    seal => seal.Exclusions.Contains(pathTable, seal.Path, path,
+                                        allowExactProbe: (observationFlags & ObservationFlags.FileProbe) != 0
+                                            && (observationFlags & ObservationFlags.Enumeration) == 0)))
                             {
                                 debugTrace.AppendLine($"type == ObservedInputType.FileContentRead || type == ObservedInputType.ExistingFileProbe");
 
@@ -1416,7 +1423,7 @@ namespace BuildXL.Scheduler.Fingerprints
         /// <summary>
         /// See <see cref="IPipExecutionEnvironment.IsSourceSealedDirectory"/>
         /// </summary>
-        bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns);
+        bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions);
 
         /// <summary>
         /// Returns whether there is (by walking the path upwards) an output directory -shared or exclusive- containing <paramref name="path"/>
@@ -1921,9 +1928,9 @@ namespace BuildXL.Scheduler.Fingerprints
         }
 
         /// <inheritdoc />
-        public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns)
+        public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions)
         {
-            return m_env.IsSourceSealedDirectory(directoryArtifact, out allDirectories, out patterns);
+            return m_env.IsSourceSealedDirectory(directoryArtifact, out allDirectories, out patterns, out exclusions);
         }
 
         /// <inheritdoc />

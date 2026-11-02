@@ -28,6 +28,23 @@ For building the eBPF sandbox from source (BuildXL developers), the correspondin
 
 Additionally, the runner requires Linux kernel 6.6+ and the following capabilities: `cap_sys_admin`, `cap_bpf`, `cap_sys_ptrace`. BuildXL will attempt to set these automatically (may require sudo).
 
+## Pinned-map cleanup
+
+Daemon startup clears stale entries from pinned maps. Hash-map iteration must
+retrieve the next key **before** deleting the current key: a missing cursor
+restarts iteration from the first bucket. Restarting for every deletion can
+exceed the daemon's first-event timeout on a large, sparse PID map.
+
+The ring-buffer native test also exercises cleanup of an empty map, a sparse
+four-million-entry-capacity map, repeated cleanup, and an invalid descriptor.
+To run just these checks with the required BPF capabilities:
+
+```bash
+sudo /path/to/ringbuffer_test --map-cleanup-only
+```
+
+This mode creates private, unpinned test maps; it does not clear the daemon's maps.
+
 ## Coding style
 # BPF programs
 - BPF programs that trace a function should use the following convention on enter `<function name>_enter` and the following on exit `<function name>_exit`
