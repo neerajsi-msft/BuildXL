@@ -47,17 +47,33 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             }
 
             root = Path.GetFullPath(root);
-            string manifest = Path.Combine(root, "manifest.json");
             var config = Build()
                 .Configuration($$"""
                     config({
                         resolvers: [{
-                            kind: "DirectGraph", moduleNames: [a`producer`, a`consumer`],
-                            workingDirectory: d`.`, tool: f`{{PathToEmitter.Replace('\\', '/')}}`,
-                            arguments: [{{JsonSerializer.Serialize(manifest)}}],
+                            kind: "DirectGraph", roots: ["consumer"],
+                            projects: [
+                                { name: a`tools`, root: d`{{root.Replace('\\', '/')}}`,
+                                  graphFiles: [f`{{root.Replace('\\', '/')}}/tools.dg`] },
+                                { name: a`producer`, root: d`{{root.Replace('\\', '/')}}/producer`,
+                                  graphFiles: [f`{{root.Replace('\\', '/')}}/producer.dg`],
+                                  dependencies: ["tools"],
+                                  fileExports: [p`{{root.Replace('\\', '/')}}/producer/generated.h`,
+                                                p`{{root.Replace('\\', '/')}}/producer/generated-input.txt`] },
+                                { name: a`consumer`, root: d`{{root.Replace('\\', '/')}}/consumer`,
+                                  graphFiles: [f`{{root.Replace('\\', '/')}}/consumer.dg`],
+                                  dependencies: ["producer", "tools"],
+                                  fileExports: [p`{{root.Replace('\\', '/')}}/consumer/consumer.out`] },
+                            ],
                         }],
-                        mounts: [{ name: a`fixture`, path: p`{{root.Replace('\\', '/')}}`,
-                            trackSourceFileChanges: true, isReadable: true, isWritable: true }],
+                        mounts: [
+                            { name: a`fixture`, path: p`{{root.Replace('\\', '/')}}`,
+                              trackSourceFileChanges: true, isReadable: true, isWritable: true },
+                            { name: a`hostUsr`, path: p`/usr`,
+                              trackSourceFileChanges: true, isReadable: true, isWritable: false },
+                            { name: a`hostBin`, path: p`/bin`,
+                              trackSourceFileChanges: true, isReadable: true, isWritable: false },
+                        ],
                     });
                     """)
                 .PersistSpecsAndGetConfiguration();
@@ -77,41 +93,71 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         public void ProjectFragmentsExecuteAndExposeRewrittenExportsToDScript()
         {
             string[] rewrite = OperatingSystemHelper.IsWindowsOS
-                ? new[] { CmdHelper.CmdX64, "/d", "/c", @"echo world>> out\a.txt" }
-                : new[] { CmdHelper.Bash, "-c", "echo world >> out/a.txt" };
+                ? new[] { CmdHelper.CmdX64, "/d", "/c", @"echo world>> out\a\a.txt" }
+                : new[] { CmdHelper.Bash, "-c", "echo world >> out/a/a.txt" };
+            string strings = string.Join("\n", rewrite.Skip(1).Select((argument, index) => $"string {index + 1} " + JsonSerializer.Serialize(argument)));
+            string arguments = string.Join("\n", rewrite.Skip(1).Select((argument, index) => $"  argument $s{index + 1}"));
             var config = Build()
                 .Configuration($$"""
                     config({
                         resolvers: [
                             {
                                 kind: "DirectGraph",
-                                moduleNames: [a`a`, a`b`],
-                                workingDirectory: d`.`,
-                                tool: f`{{PathToEmitter.Replace('\\', '/')}}`,
-                                arguments: ["projects.json"],
+                                roots: ["b"],
+                                projects: [
+                                    { name: a`tools`, root: d`.`, graphFiles: [f`tools.dg`],
+                                      directoryExports: [p`{{Path.GetDirectoryName(rewrite[0]).Replace('\\', '/')}}`] },
+                                    { name: a`a`, root: d`.`, graphFiles: [f`a.dg`], policyFiles: [f`a.policy.dg`],
+                                      dependencies: ["tools"], directoryExports: [p`out/a`] },
+                                    { name: a`b`, root: d`.`, graphFiles: [f`b.dg`],
+                                      dependencies: ["a"], fileExports: [p`out/b.txt`] },
+                                ],
                             },
                             { kind: "DScript", modules: [{ moduleName: "consumer", projects: [f`consumer.dsc`] }] },
                         ],
                         mounts: [{ name: a`out`, path: p`out`, trackSourceFileChanges: true, isReadable: true, isWritable: true }],
                     });
                     """)
-                .AddFile("projects.json", """
-                    {"formatVersion":1,"roots":["b"],"projects":[
-                        {"name":"b","fragment":"b.json","dependencies":["a"]},
-                        {"name":"a","fragment":"a.json","dependencies":[]}]}
+                .AddFile("tools.dg", $$"""
+                    directgraph 2
+                    path 0 {{JsonSerializer.Serialize(Path.GetDirectoryName(rewrite[0]))}}
+                    sealDirectory host
+                      directoryRoot $p0
+                      sealKind sourceTopDirectoryOnly
                     """)
-                .AddFile("a.json", $$"""
-                    {"formatVersion":1,"operations":[
-                        {"kind":"writeFile","name":"write","destination":"out/a.txt","content":"hello\n"},
-                        {"kind":"process","name":"rewrite","executable":{{JsonSerializer.Serialize(rewrite[0])}},
-                         "workingDirectory":".","arguments":{{JsonSerializer.Serialize(rewrite[1..])}},
-                         "options":["dependsOnCurrentOs"],"rewrittenFiles":[{"producedBy":"write","path":"out/a.txt"}]}],
-                     "exports":{"files":[{"producedBy":"rewrite","path":"out/a.txt"}]} }
+                .AddFile("a.dg", $$"""
+                    directgraph 2
+                    path 0 "out/a/a.txt"
+                    path 1 {{JsonSerializer.Serialize(rewrite[0])}}
+                    path 2 "."
+                    string 0 "hello\n"
+                    {{strings}}
+                    writeFile write
+                      destination $p0
+                      content $s0
+                    process rewrite
+                      executable $p1
+                      workingDirectory $p2
+                    {{arguments}}
+                      option dependsOnCurrentOs
+                      rewrite $p0
                     """)
-                .AddFile("b.json", """
-                    {"formatVersion":1,"operations":[
-                        {"kind":"copyFile","name":"write","source":{"sourcePath":"out/a.txt"},"destination":"out/b.txt"}],
-                     "exports":{"files":[{"producedBy":"write","path":"out/b.txt"}]}}
+                .AddFile("a.policy.dg", """
+                    directgraph 2
+                    path 0 "out/a"
+                    path 1 "out/a/a.txt"
+                    sealDirectory publicHeaders
+                      directoryRoot $p0
+                      sealKind partial
+                      content $p1
+                    """)
+                .AddFile("b.dg", """
+                    directgraph 2
+                    path 0 "out/a/a.txt"
+                    path 1 "out/b.txt"
+                    copyFile write
+                      source $p0
+                      destination $p1
                     """)
                 .AddSpec("consumer.dsc", """
                     import { files } from "b";

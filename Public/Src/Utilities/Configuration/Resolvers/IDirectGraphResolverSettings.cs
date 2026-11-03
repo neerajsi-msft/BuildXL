@@ -12,6 +12,12 @@ namespace BuildXL.Utilities.Configuration
     /// </summary>
     public interface IDirectGraphResolverSettings : IResolverSettings
     {
+        /// <summary>Streaming text projects. Mutually exclusive with the external gRPC tool settings.</summary>
+        IReadOnlyList<IDirectGraphProjectSettings> Projects { get; }
+
+        /// <summary>Projects to construct, including their dependency closure. Omitted means all projects.</summary>
+        IReadOnlyList<string> Roots { get; }
+
         /// <summary>
         /// The working directory for the tool.
         /// </summary>

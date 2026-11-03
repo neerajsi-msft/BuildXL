@@ -9,9 +9,6 @@ namespace GraphEmitter
 {
     internal sealed class GraphDefinition
     {
-        [JsonIgnore]
-        public bool IsProjectGraph { get; set; }
-
         [JsonProperty("modules", Required = Required.Always)]
         public IReadOnlyList<ModuleDefinition> Modules { get; set; }
     }
@@ -162,9 +159,6 @@ namespace GraphEmitter
     /// </summary>
     internal sealed class DirectoryReferenceDefinition
     {
-        [JsonProperty("dependency")]
-        public string Dependency { get; set; }
-
         [JsonProperty("producedBy")]
         public string ProducedBy { get; set; }
 
@@ -177,9 +171,6 @@ namespace GraphEmitter
 
     internal sealed class FileReferenceDefinition
     {
-        [JsonProperty("dependency")]
-        public string Dependency { get; set; }
-
         [JsonProperty("sourcePath")]
         public string SourcePath { get; set; }
 

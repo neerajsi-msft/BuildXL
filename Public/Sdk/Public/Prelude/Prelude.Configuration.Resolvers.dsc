@@ -1071,8 +1071,14 @@ interface NinjaResolver extends ResolverBase, UntrackingSettings {
 interface DirectGraphResolver extends ResolverBase {
     kind: "DirectGraph";
 
+    /** Native streaming text mode. Mutually exclusive with tool/moduleNames/workingDirectory/arguments/environment. */
+    projects?: DirectGraphProject[];
+
+    /** Selected project roots and their dependency closure. Omitted means all projects. */
+    roots?: string[];
+
     /** The working directory for the tool. */
-    workingDirectory: Directory;
+    workingDirectory?: Directory;
 
     /** 
      * The names of the modules owned by this resolver. A name is a path atom because each module is represented by a
@@ -1082,10 +1088,10 @@ interface DirectGraphResolver extends ResolverBase {
      * resolver whose modules are all declared by earlier resolvers does not run its tool.
      * The tool must refer to a module by exactly the name given here. 
      */
-    moduleNames: PathAtom[];
+    moduleNames?: PathAtom[];
 
     /** The tool that contributes pips to the graph. */
-    tool: File;
+    tool?: File;
 
     /** Arguments passed to the tool as individual command-line arguments. */
     arguments?: string[];
@@ -1110,6 +1116,20 @@ interface DirectGraphResolver extends ResolverBase {
 
     /** Turns on file access reporting for the tool, and logs every operation BuildXL handles and the response to it. */
     enableProjectGraphVerboseLogging?: boolean;
+}
+
+interface DirectGraphProject {
+    name: PathAtom;
+    root: Directory;
+    /** Action fragments in construction order. May be empty for a policy-only provider. */
+    graphFiles?: File[];
+    /** Read after graphFiles, in the same project context. Atoms and sets remain file-local. */
+    policyFiles?: File[];
+    /** Only direct dependencies grant access to published artifacts. */
+    dependencies?: string[];
+    /** Omitted export lists publish nothing beyond explicit export records in fragments. */
+    fileExports?: Path[];
+    directoryExports?: Path[];
 }
 
 interface ToolConfiguration {

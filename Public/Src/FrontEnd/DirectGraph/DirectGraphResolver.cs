@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics.ContractsLight;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using BuildXL.Engine.DirectGraph;
@@ -208,6 +209,11 @@ namespace BuildXL.FrontEnd.DirectGraph
 
         private async Task<bool> ConstructGraphAsync()
         {
+            if (m_resolverSettings.Projects != null)
+            {
+                return await ConstructTextGraphAsync();
+            }
+
             var toolPath = m_resolverSettings.Tool.Path;
             var toolPathString = toolPath.ToString(m_context.PathTable);
             if (!m_host.Engine.FileExists(toolPath))
@@ -221,22 +227,7 @@ namespace BuildXL.FrontEnd.DirectGraph
 
             RegisterModulesTheHostLeftOut();
 
-            var graphBuilder = new DirectGraphPipGraphBuilder(
-                m_context.PathTable,
-                m_host.PipGraph,
-                m_host.Configuration.Sandbox,
-                () => ProcessBuilder.Create(
-                    m_context.PathTable,
-                    m_context.GetPipDataBuilder(),
-                    m_context.CredentialScanner,
-                    m_context.LoggingContext),
-                TryGetPipConstructionHelper,
-                TryRegisterExport,
-                m_context.LoggingContext,
-                // Tracing runs the protobuf text formatter over every request and every response and logs the result,
-                // so it cannot be on unconditionally.
-                traceOperation: m_resolverSettings.EnableProjectGraphVerboseLogging ?? false,
-                counters: m_counters);
+            var graphBuilder = CreateGraphBuilder();
 
             int idleTimeoutMinutes = Math.Min(m_resolverSettings.IdleTimeoutMin ?? DefaultIdleTimeoutMinutes, MaxTimerDelayMinutes);
             var idleTimeout = TimeSpan.FromMinutes(idleTimeoutMinutes);
@@ -343,6 +334,51 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
 
             return true;
+        }
+
+        private DirectGraphPipGraphBuilder CreateGraphBuilder() =>
+            new DirectGraphPipGraphBuilder(
+                m_context.PathTable,
+                m_host.PipGraph,
+                m_host.Configuration.Sandbox,
+                () => ProcessBuilder.Create(
+                    m_context.PathTable,
+                    m_context.GetPipDataBuilder(),
+                    m_context.CredentialScanner,
+                    m_context.LoggingContext),
+                TryGetPipConstructionHelper,
+                TryRegisterExport,
+                m_context.LoggingContext,
+                // Tracing runs the protobuf text formatter over every request and every response and logs the result,
+                // so it cannot be on unconditionally.
+                traceOperation: m_resolverSettings.EnableProjectGraphVerboseLogging ?? false,
+                counters: m_counters);
+
+        private async Task<bool> ConstructTextGraphAsync()
+        {
+            RegisterModulesTheHostLeftOut();
+            var builder = CreateGraphBuilder();
+            var loader = new DirectGraphTextLoader(m_context.PathTable, builder.HandleOperationAsync);
+            try
+            {
+                await loader.LoadAsync(
+                    m_resolverSettings.Projects,
+                    m_resolverSettings.Roots,
+                    path =>
+                    {
+                        m_host.Engine.RecordFrontEndFile(path, Name);
+                        return new StreamReader(new FileStream(path.ToString(m_context.PathTable), FileMode.Open, FileAccess.Read, FileShare.Read),
+                            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true));
+                    },
+                    path => m_host.Engine.FileExists(path),
+                    m_context.CancellationToken);
+                return builder.IsComplete;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                Tracing.Logger.Log.TextGraphError(m_context.LoggingContext, exception.Message);
+                return false;
+            }
         }
 
         /// <inheritdoc />

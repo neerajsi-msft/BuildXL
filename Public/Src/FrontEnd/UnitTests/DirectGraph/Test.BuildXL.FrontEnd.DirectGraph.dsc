@@ -23,10 +23,9 @@ namespace Test.DirectGraph {
     export const dll = !BuildXLSdk.isTargetRuntimeOsx && BuildXLSdk.test({
         assemblyName: "Test.BuildXL.FrontEnd.DirectGraph",
         sources: [
+            f`${Context.getMount("SourceRoot").path}/Examples/DirectGraph/GraphRenderer/Renderer.cs`,
             ...globR(d`SchedulingTests`, "*.cs"),
             ...globR(d`IntegrationTests`, "*.cs"),
-            f`${Context.getMount("SourceRoot").path}/Examples/DirectGraph/GraphEmitter/GraphDefinition.cs`,
-            f`${Context.getMount("SourceRoot").path}/Examples/DirectGraph/GraphEmitter/ProjectGraphDefinition.cs`,
         ],
         runTestArgs: {
             envVars: katiFixture ? [{ name: "KATI_DIRECTGRAPH_FIXTURE", value: katiFixture.path }] : [],

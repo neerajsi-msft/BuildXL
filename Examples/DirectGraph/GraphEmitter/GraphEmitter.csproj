@@ -19,6 +19,7 @@
   <ItemGroup>
     <Protobuf Include="..\..\..\Public\Src\Engine\DirectGraph\DirectGraph.proto" GrpcServices="Client" />
     <Compile Include="..\..\..\Public\Src\Engine\DirectGraph\DirectGraphProtocol.cs" Link="DirectGraphProtocol.cs" />
+    <Compile Include="..\..\..\Public\Src\Engine\DirectGraph\DirectGraphValueRegistry.cs" Link="DirectGraphValueRegistry.cs" />
   </ItemGroup>
 
 </Project>

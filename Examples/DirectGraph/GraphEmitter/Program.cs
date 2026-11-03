@@ -43,19 +43,13 @@ namespace GraphEmitter
 
         private static async Task<int> RunAsync(string[] args)
         {
-            bool validateOnly = args.Length == 2 && args[0] == "--validate";
-            if (args.Length != 1 && !validateOnly)
+            if (args.Length != 1)
             {
-                Console.Error.WriteLine("Usage: GraphEmitter [--validate] <graph.json|projects.json>");
+                Console.Error.WriteLine("Usage: GraphEmitter <graph.json>");
                 return 1;
             }
 
-            var definition = ProjectGraphDefinition.Load(args[validateOnly ? 1 : 0]);
-            if (validateOnly)
-            {
-                Console.WriteLine($"Validated {definition.Modules.Count} modules and {definition.Modules.Sum(module => module.Operations.Count)} operations.");
-                return 0;
-            }
+            var definition = JsonConvert.DeserializeObject<GraphDefinition>(await File.ReadAllTextAsync(args[0]));
             string endpoint = Environment.GetEnvironmentVariable(ChannelEnvironmentVariable);
             if (string.IsNullOrWhiteSpace(endpoint))
             {
@@ -69,7 +63,7 @@ namespace GraphEmitter
                 throw new InvalidDataException("The graph definition must contain a 'modules' array.");
             }
 
-            var state = new EmitterState { PreserveLiterals = definition.IsProjectGraph };
+            var state = new EmitterState();
             var moduleNames = new HashSet<string>(StringComparer.Ordinal);
             ulong operationId = 1;
 
@@ -434,7 +428,7 @@ namespace GraphEmitter
 
             foreach (string argument in definition.Arguments ?? Array.Empty<string>())
             {
-                request.Arguments.Add(values.String(state.PreserveLiterals ? argument : Environment.ExpandEnvironmentVariables(argument)));
+                request.Arguments.Add(values.String(Environment.ExpandEnvironmentVariables(argument)));
             }
 
             foreach (string outputFile in definition.OutputFiles ?? Array.Empty<string>())
@@ -553,9 +547,7 @@ namespace GraphEmitter
         /// </summary>
         private sealed class EmitterState
         {
-            public bool PreserveLiterals { get; init; }
-
-            public string ResolvePath(string path) => PreserveLiterals ? Path.GetFullPath(path) : Program.ResolvePath(path);
+            public string ResolvePath(string path) => Program.ResolvePath(path);
 
             public DirectGraphValueRegistry Values { get; } = new();
 

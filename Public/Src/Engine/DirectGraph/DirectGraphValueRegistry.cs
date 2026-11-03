@@ -3,13 +3,12 @@
 
 using System;
 using System.Collections.Generic;
-using BuildXL.Engine.DirectGraph;
 using Google.Protobuf.Collections;
 
-namespace GraphEmitter
+namespace BuildXL.Engine.DirectGraph
 {
     /// <summary>
-    /// Emitter-side interning for the DirectGraph protocol: gives each distinct path and string its id, and registers the
+    /// Stream-local interning for DirectGraph callers: gives each distinct path and string its id, and registers the
     /// values not sent yet, with their ids, on the operation that is about to be written.
     /// </summary>
     /// <remarks>
@@ -17,7 +16,7 @@ namespace GraphEmitter
     /// written, and look values up only for the operation being written next. Operations may be generated concurrently
     /// elsewhere as long as they carry plain values until then. Not thread-safe, deliberately.
     /// </remarks>
-    internal sealed class DirectGraphValueRegistry
+    public sealed class DirectGraphValueRegistry
     {
         private readonly Dictionary<string, uint> m_pathIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, uint> m_stringIds = new(StringComparer.Ordinal);

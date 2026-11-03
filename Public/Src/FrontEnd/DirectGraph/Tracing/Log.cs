@@ -69,5 +69,14 @@ namespace BuildXL.FrontEnd.DirectGraph.Tracing
             EventTask = (ushort)Tasks.Parser,
             Message = "Invalid DirectGraph resolver settings. 'idleTimeoutMin' is {idleTimeoutMin}, but it must be at least {minimum} minute(s).")]
         public abstract void ReportResolverInvalidIdleTimeout(LoggingContext context, int idleTimeoutMin, int minimum);
+
+        [GeneratedEvent(
+            (ushort)LogEventId.TextGraphError,
+            EventGenerators = EventGenerators.LocalOnly,
+            EventLevel = Level.Error,
+            Keywords = (ushort)(Keywords.UserMessage | Keywords.UserError),
+            EventTask = (ushort)Tasks.Parser,
+            Message = "DirectGraph text graph failed: {error}")]
+        public abstract void TextGraphError(LoggingContext context, string error);
     }
 }

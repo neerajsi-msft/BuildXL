@@ -269,103 +269,177 @@ inputs, not automatically public exports.
 
 ### DirectGraph textual project fragments (experimental)
 
-The reference emitter in `Examples/DirectGraph/GraphEmitter` accepts a versioned
-project manifest as an alternative to its original `modules` JSON. Configure
-the existing DirectGraph resolver with the emitter as `tool`, the manifest as
-its sole argument, and the selected projects as `moduleNames`. The tool reads
-the manifest and fragments under frontend sandbox tracking, links them, and
-streams their operations to BuildXL. It does not execute their recipes.
+The DirectGraph resolver has a native file mode alongside its existing external
+gRPC tool mode. File mode replaces the experimental JSON project manifest and
+linker. It reads compact UTF-8 fragments one operation at a time and calls the
+existing pip builder in process: there is no JSON graph, emitter executable,
+protobuf serialization, or gRPC connection on this path. Construction still
+uses the builder's existing request objects and validation.
 
-```json
-{
-  "formatVersion": 1,
-  "roots": ["application"],
-  "projects": [
-    { "name": "headers", "fragment": "headers.dg.json", "dependencies": [] },
-    { "name": "application", "fragment": "application.dg.json", "dependencies": ["headers"] }
-  ]
-}
+Project wiring and public interfaces belong in resolver configuration:
+
+```typescript
+config({
+    resolvers: [{
+        kind: "DirectGraph",
+        roots: ["application"],
+        projects: [
+            { name: a`headers`, root: d`.`,
+              graphFiles: [f`headers.dg`], policyFiles: [f`headers.policy.dg`],
+              fileExports: [p`sdk/api.h`] },
+            { name: a`application`, root: d`.`,
+              graphFiles: [f`application.dg`], dependencies: ["headers"],
+              fileExports: [p`out/application`] },
+        ],
+    }],
+});
 ```
 
 Every project must declare its dependencies; names are case-sensitive. The
-entire project DAG is validated before any construction stream opens. Omitted
+entire project DAG is validated before any fragment is opened. Omitted
 `roots` selects every project; otherwise construction includes the selected
-roots and their transitive dependencies. Fragments are currently loaded eagerly,
-including unselected projects, so their output ownership is known and stale
-generated files cannot be mistaken for sources.
+roots and their transitive dependencies. Unselected fragments are not read.
+Selected projects load dependency-first. Within each project, `graphFiles`
+load in order, followed by `policyFiles`, then configured exports. Policy-only
+projects are allowed. File mode is mutually exclusive with the external tool's
+`moduleNames`, `tool`, `workingDirectory`, `arguments`, `environment`, and timeout.
 
-A fragment has `formatVersion: 1`, an optional `root`, an `operations` array,
-optional `dependencySets`, and optional `exports`. Manifest fragment paths are
-relative to the manifest file. Fragment paths are relative to its `root`, which
-defaults to the fragment file's directory; a manifest project can override it.
-Arguments, environment values, and write-file content are literal strings.
+Each fragment starts with `directgraph 2`. Unindented records define operations,
+path/string registrations, or dependency sets. Indented fields belong to the preceding operation.
+Blank lines and full-line `#` comments are ignored. Values are whitespace-delimited
+bare tokens or quoted strings; quoted strings support `\\`, `\"`, `\n`, `\r`,
+`\t`, and `\uXXXX`. NUL, malformed escapes, unknown records/fields, duplicate
+scalar fields, and invalid or redefined IDs fail explicitly. There are no variables,
+includes, implicit rules, environment expansion, or embedded evaluation.
 
-```json
-{
-  "formatVersion": 1,
-  "operations": [
-    { "name": "generate", "kind": "writeFile", "destination": "sdk/api.h", "content": "/* generated */" }
-  ],
-  "exports": {
-    "files": [{ "producedBy": "generate", "path": "sdk/api.h" }]
-  }
-}
+```text
+directgraph 2
+path 0 "sdk/api.h"
+string 0 "/* generated */\n"
+writeFile generate
+  destination $p0
+  content $s0
 ```
 
 Operation names are local to a project and may be reused in other projects.
-Operations must be topologically ordered within each fragment. Files use
-`{ "sourcePath": "..." }`, `{ "producedBy": "local-operation", "path": "..." }`,
-or `{ "dependency": "direct-project-name", "path": "..." }` references.
-Directory references use `producedBy` (with an optional path when unambiguous)
-or `dependency` plus the exact exported root.
-Process executables can use the original source-path `executable` string or an
-`executableFile` file reference for an actual generated tool.
+Operations must be topologically ordered across a project's files. Artifact
+paths are absolute or relative to the configured project `root`. Inputs name
+paths, not imports or producer operation IDs. A path resolves to an earlier
+local output or an artifact published by a direct dependency. Executables use
+the same resolution, including generated executables.
+
+Each `argument` field accepts one or more string references, for example
+`argument $s0 $s1 $s2`. Their values concatenate without separators into one
+logical argument. Whitespace, quotes, and backslashes are preserved, and normal
+command-line escaping applies to the complete argument. The text loader splits
+the escaped spelling at whitespace runs and individual double/single quotes and
+backticks into literal `PipData` chunks rather than interning a whole
+command string. This is a text-only, in-process feature: the gRPC schema remains
+string-ID-only. It does not interpret shell syntax or infer path fragments.
+
+For `writeFile`, the required single `content` field also accepts multiple string
+references. These concatenate directly into factored `PipData` with no escaping,
+preserving file bytes including whitespace and trailing newlines. The original
+single-reference form remains supported. `sealDirectory content` still names
+paths and is unchanged.
+
+For inspecting a fragment without constructing a BuildXL graph, the standalone
+`Examples/DirectGraph/GraphRenderer` tool source-links the same streaming reader.
+It requires .NET 10 and no NuGet packages:
+
+```sh
+dotnet build Examples/DirectGraph/GraphRenderer/GraphRenderer.csproj -c Release
+dotnet Examples/DirectGraph/GraphRenderer/bin/Release/net10.0/dg-render.dll graph.dg --output libfunosrt-s2-posix.a
+```
+
+Omit filters to render every operation. `--operation name` selects an exact
+operation name; `--output path-or-basename` selects output files/directories,
+rewrite paths, or destinations. Both filters combine with AND; comparisons are
+case-sensitive and accept either slash style. Each operation includes its source
+location. Arguments remain individually indexed; argument and write-file content
+chunks concatenate, while path lists remain lists. Multiline blocks show quoted
+lines with `LF`, `CRLF`, `CR`, or `EOF` markers to distinguish exact endings.
+The output is a debug view, not reloadable DG or an executable script. The tool
+checks fragment syntax and references, not project linking or semantic validity;
+it scans the complete file even when filtering. Exit codes are 0 for success,
+1 for no matches, and 2 for usage, input, or I/O errors. Use BXL Analyzer for the
+final linked pip graph.
 
 Only direct dependencies' explicit exports are visible. Re-exports preserve the
-original producer reference. A source reference that names another project's
-known output is linked only when that output is visible; a stale disk file
-does not rescue a private or nondependency output. Partial-directory members
-retain their actual file producers. Dynamic-directory members use exported
-directory artifacts; an opaque export does not expose private explicit files.
-Consumers receive the same file rewrite and directory identities constructed
-by the original producers. The existing DScript `files` and `directories` maps
-expose each project's exports after successful completion.
+original producer. Static-directory members retain their actual file producers;
+dynamic-directory members acquire the corresponding directory input. Ambiguous
+directory roots require a producer qualifier (`operation` locally or
+`project/operation` for dependencies). An opaque export does not expose unrelated
+private explicit files. The existing DScript `files` and `directories` maps expose
+each project's interface only after successful graph construction.
 
-Process operations can reference shared file-reference arrays through
-`inputSets` and `orderOnlySets`, in addition to `inputFiles` and
-`orderOnlyInputs`. Their definitions live in `dependencySets`. These arrays
-are expanded in order during lowering; they compact the text, not the native
-pip graph. They do not yet retain Make-variable provenance or form a native
-dependency-group pip.
+Unresolved inputs are not implicitly sources: they require a visible explicit
+source seal, optionally filtered by filename patterns and top-directory-only
+scope. Source seals can live in dependency-only provider fragments. Their source
+cones must not overlap constructed generated files, configured file exports, or dynamic output regions,
+regardless of construction order. Keep source declarations restricted to actual
+source/toolchain trees under readable mounts; unselected fragments' private output paths are not indexed.
+
+The supported operation fields are:
+
+| Record | Fields |
+|---|---|
+| `writeFile name` | `destination`, `content`, optional `description` |
+| `copyFile name` | `source`, `destination`, optional `description` |
+| `process name` | `executable`, `workingDirectory`; repeated `argument`, `environment name value`, `passthroughEnvironment name`, `option name`, `input`, `orderOnly`, `inputDirectory root [producer]`, `output`, `rewrite`, `outputDirectory root [shared\|exclusive]`; optional `description` |
+| `sealDirectory name` | `directoryRoot`, optional `sealKind` (`partial`, `full`, `sourceAllDirectories`, `sourceTopDirectoryOnly`); repeated `content`, `outputDirectory root [producer]`, `pattern`; optional `description` |
+| `composeSharedOpaque name` | `directoryRoot`, repeated `directory root [producer]`; optional `action` (`widen` or `narrow`), `includeRegex` or `excludeRegex`, `description` |
+| `export name` | Repeated `file path`, `directory root [producer]` |
+
+Exports must follow construction records. Configured export lists publish existing
+artifacts, not directory scans; omitted lists add no exports. A policy fragment
+can create a partial seal from selected generated outputs and publish it without
+changing Kati's action fragment.
+
+`path ID "literal"` and `string ID "literal"` register immutable file-local
+values. Each table uses dense integer IDs starting at zero, in registration
+order. Every field corresponding to a gRPC path/string ID requires a `$pID` or
+`$sID` reference, even for a value used once; literals, forward references,
+wrong-kind references, and non-dense registrations are rejected. Paths may be
+absolute or project-root-relative. Operation names, producer qualifiers, enums,
+options, and composition regexes remain literal, matching the gRPC contract's
+literal-valued fields. IDs restart in each graph/policy file and are remapped
+into the builder's stream-wide registry. Version 1 fragments must be regenerated.
+
+`set ID $pID...` defines an immutable file-local dependency list with its own
+dense IDs, referenced by `input @ID` or `orderOnly @ID`. Definitions precede
+uses and sets cannot nest. These compact
+the text; expansion still produces native per-consumer dependencies and
+observations. Make-variable provenance and native dependency-group pips are not
+implemented.
 
 Order-only produced-file references establish scheduling edges without read
 authorization or content fingerprint dependencies. Source order-only references
-are existence-checked by the tracked emitter. Actual reads still require file
-or directory inputs. This wire addition requires DirectGraph protocol version
-2; the textual format version is independently 1. Older emitters/engines fail
-explicitly on protocol skew.
+are existence-probed through the frontend engine. Every loaded graph/policy file
+is registered as a tracked frontend input. Pip caching and sandbox observations
+remain enabled. Projects share one builder; independently cached fragments and
+per-project graph patching are not provided.
 
-`GraphEmitter --validate projects.json` checks structural project linking
-without connecting to BuildXL. Actual pip validation and execution still require
-the resolver. Projects share one construction stream; independently scheduled
-cross-resolver fragments and per-project graph caching/patching are not provided.
-
-The experimental Kati backend emits this fragment format directly from its
-evaluated action graph with `ckati --direct_graph=project.dg.json <targets>`;
+The experimental Kati BuildXL backend emits this DirectGraph fragment format
+directly from its evaluated action graph with `ckati --buildxl=project.dg <targets>`;
 it does not parse Ninja, and this option is mutually exclusive with `--ninja`.
-The caller supplies the project manifest and dependency declarations. Normal
-prerequisites authorize reads; order-only prerequisites do not. The supported
+Kati emits production facts, not project exports or BuildXL policy. The supported
 subset includes grouped outputs, structural phony aliases, target-scoped
-recipes, and shared evaluated dependency lists. Depfiles, commandful phony
+recipes, and shared evaluated dependency lists. Commandless rules, including
+recipes that evaluate to no commands, follow Kati-to-Ninja phony-edge semantics:
+they create no pip, and consumers retain their recursively flattened normal and
+order-only prerequisites. An input-free commandless rule contributes no input,
+whether or not its named file exists; it does not create that file. This matches
+the Ninja importer's dependency model, not Ninja's timestamp/dirty-state logic
+or GNU Make's force/rebuild semantics. Depfiles, commandful phony
 targets, and several Make/Ninja-specific features are explicitly unsupported;
 this is not yet a drop-in full SDK build backend.
 
 The Linux interoperability test `KatiGeneratedProjectFragmentsExecute` accepts
-an isolated producer/consumer fixture through `KATI_DIRECTGRAPH_FIXTURE`.
-It consumes the original Kati-emitted `manifest.json` and fragments, executes
-them with the nested BuildXL engine, and checks the generated header and text
-concatenation. Only the outer test runner excludes that fixture's I/O from
-tracking; the nested engine still sandboxes the actual build processes.
-In this opt-in mode the outer test runner always executes, since its cache
-cannot replay external fixture outputs; caching remains enabled for the nested
-build processes and the rest of the build.
+an isolated tools/producer/consumer fixture through `KATI_DIRECTGRAPH_FIXTURE`.
+It loads `tools.dg`, `producer.dg`, and `consumer.dg` natively, executes the pips,
+and checks the generated header and text concatenation. Only the outer test
+runner excludes that fixture's I/O and disables its own cache lookup, because
+its cache cannot replay external fixture outputs. The nested build keeps normal
+caching and sandboxing. The original JSON-based example remains solely a
+demonstration of the separate external gRPC API.

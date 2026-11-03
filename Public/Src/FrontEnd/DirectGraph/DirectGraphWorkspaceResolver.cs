@@ -7,6 +7,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.ContractsLight;
 using System.Linq;
+using System.IO;
 using System.Threading.Tasks;
 using BuildXL.FrontEnd.Sdk;
 using BuildXL.FrontEnd.Utilities;
@@ -98,7 +99,10 @@ namespace BuildXL.FrontEnd.DirectGraph
 
             m_specsPerModule = new ReadOnlyDictionary<AbsolutePath, ModuleDescriptor>(ModuleDefinitions.ToDictionary(kvp => kvp.Value.Specs.Single(), kvp => kvp.Value.Descriptor));
 
-            ResolverSettings.ComputeEnvironment(m_resolverSettings.Environment, m_context.PathTable, out m_trackedEnvironmentVariables, out m_passthroughEnvironmentVariables, out m_processEnvironmentUsed);
+            if (m_resolverSettings.Projects == null)
+            {
+                ResolverSettings.ComputeEnvironment(m_resolverSettings.Environment, m_context.PathTable, out m_trackedEnvironmentVariables, out m_passthroughEnvironmentVariables, out m_processEnvironmentUsed);
+            }
 
             return result;
         }
@@ -168,6 +172,31 @@ namespace BuildXL.FrontEnd.DirectGraph
         private bool ValidateSettings(IDirectGraphResolverSettings resolverSettings, out IReadOnlySet<string> moduleNames)
         {
             moduleNames = CollectionUtilities.EmptySet<string>();
+
+            if (resolverSettings.Projects != null)
+            {
+                try
+                {
+                    if (resolverSettings.Tool.IsValid || resolverSettings.ModuleNames != null || resolverSettings.WorkingDirectory.IsValid ||
+                        resolverSettings.Arguments != null || resolverSettings.Environment != null || resolverSettings.IdleTimeoutMin != null)
+                    {
+                        throw new InvalidDataException("Text projects cannot be combined with external tool settings.");
+                    }
+                    DirectGraphTextLoader.OrderProjects(resolverSettings.Projects, resolverSettings.Roots, m_context.PathTable);
+                    moduleNames = resolverSettings.Projects.Select(project => project.Name.ToString(m_context.StringTable)).ToReadOnlySet();
+                    return true;
+                }
+                catch (InvalidDataException exception)
+                {
+                    Tracing.Logger.Log.TextGraphError(m_context.LoggingContext, exception.Message);
+                    return false;
+                }
+            }
+            if (resolverSettings.Roots != null)
+            {
+                Tracing.Logger.Log.TextGraphError(m_context.LoggingContext, "roots requires text projects.");
+                return false;
+            }
 
             if (resolverSettings.ModuleNames == null || resolverSettings.ModuleNames.Count == 0)
             {

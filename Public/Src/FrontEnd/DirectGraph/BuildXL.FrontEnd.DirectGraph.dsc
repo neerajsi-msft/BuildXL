@@ -15,11 +15,13 @@ namespace DirectGraph {
             importFrom("BuildXL.Pips").dll,
             importFrom("BuildXL.Utilities").Configuration.dll,
             importFrom("BuildXL.Utilities").Utilities.Core.dll,
+            importFrom("BuildXL.Utilities").Native.dll,
             Core.dll,
             Script.dll,
             Sdk.dll,
             Utilities.dll,
             TypeScript.Net.dll,
+            ...importFrom("BuildXL.Cache.ContentStore").getGrpcPackages(true),
         ],
     });
 }

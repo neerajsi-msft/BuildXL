@@ -18,5 +18,6 @@ namespace BuildXL.FrontEnd.DirectGraph.Tracing
         ResolverEmptyModuleName = 13002,
         ResolverDuplicateModuleNames = 13003,
         ResolverInvalidIdleTimeout = 13004,
+        TextGraphError = 13005,
     }
 }

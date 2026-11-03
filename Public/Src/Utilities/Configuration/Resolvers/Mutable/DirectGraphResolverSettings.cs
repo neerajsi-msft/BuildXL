@@ -21,6 +21,8 @@ namespace BuildXL.Utilities.Configuration.Mutable
         public DirectGraphResolverSettings(IDirectGraphResolverSettings template, PathRemapper pathRemapper) : base(template, pathRemapper)
         {
             WorkingDirectory = pathRemapper.Remap(template.WorkingDirectory);
+            Projects = template.Projects?.Select(project => project == null ? null : new DirectGraphProjectSettings(project, pathRemapper)).ToList();
+            Roots = template.Roots;
             ModuleNames = template.ModuleNames?.Select(pathRemapper.Remap).ToList();
             Tool = pathRemapper.Remap(template.Tool);
             Arguments = template.Arguments;
@@ -31,6 +33,12 @@ namespace BuildXL.Utilities.Configuration.Mutable
 
         /// <inheritdoc />
         public AbsolutePath WorkingDirectory { get; set; }
+
+        /// <inheritdoc />
+        public IReadOnlyList<IDirectGraphProjectSettings> Projects { get; set; }
+
+        /// <inheritdoc />
+        public IReadOnlyList<string> Roots { get; set; }
 
         /// <inheritdoc />
         public IReadOnlyList<PathAtom> ModuleNames { get; set; }

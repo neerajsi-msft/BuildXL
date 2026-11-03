@@ -3,10 +3,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using BuildXL.Engine.DirectGraph;
+using BuildXL.FrontEnd.DirectGraph;
 using BuildXL.Pips;
 using BuildXL.Pips.Builders;
 using BuildXL.Pips.Graph;
@@ -73,6 +75,78 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 new LoggingContext("Test"),
                 traceOperation: false,
                 counters: m_counters);
+
+        [Fact]
+        public void TextComposedArgumentsAndContentReachPipsWithoutFlattening()
+        {
+            const string text = """
+                directgraph 2
+                path 0 "tool"
+                path 1 "."
+                path 2 "result"
+                string 0 "-c"
+                string 1 "echo "
+                string 2 "\"a b\""
+                string 3 ""
+                string 4 " \t\r\n"
+                writeFile tool
+                  destination $p0
+                  content $s1 $s2 $s4 $s3
+                process composed
+                  executable $p0
+                  workingDirectory $p1
+                  argument $s0
+                  argument $s1 $s2
+                  argument $s3
+                  output $p2
+                """;
+            var project = new global::BuildXL.Utilities.Configuration.Mutable.DirectGraphProjectSettings
+            {
+                Name = PathAtom.Create(m_context.StringTable, TestModule),
+                Root = m_root,
+                GraphFiles = new[] { m_root.Combine(m_context.PathTable, "graph.dg") },
+            };
+            var loader = new DirectGraphTextLoader(m_context.PathTable, m_graphBuilder.HandleOperationAsync);
+            loader.LoadAsync(new[] { project }, null, _ => new StringReader(text), _ => true, CancellationToken.None).GetAwaiter().GetResult();
+
+            var actual = ProcessOf("composed").Arguments;
+            var expected = PipDataBuilder.CreatePipData(m_context.StringTable, " ", PipDataFragmentEscaping.CRuntimeArgumentRules,
+                "-c", "echo \"a b\"", "");
+            Assert.Equal(expected.ToString(m_context.PathTable), actual.ToString(m_context.PathTable));
+            var groups = Assert.Single(actual).GetNestedFragmentValue();
+            Assert.Equal(3, groups.FragmentCount);
+            Assert.True(groups.Skip(1).First().GetNestedFragmentValue().FragmentCount > 1);
+            var content = Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<WriteFile>()).Contents;
+            Assert.Equal("echo \"a b\" \t\r\n", content.ToString(m_context.PathTable));
+            Assert.True(content.FragmentCount > 1);
+        }
+
+        [Fact]
+        public void StructuredArgumentsCannotSilentlyOverrideWireArguments()
+        {
+            var request = NewProcess("ambiguous", "out.txt");
+            request.Arguments.Add(Text("wire"));
+            var operation = new GraphOperation { OperationId = 1, AddProcess = request, ProtocolVersion = DirectGraphProtocol.Version };
+            var arguments = PipDataBuilder.CreatePipData(m_context.StringTable, " ", PipDataFragmentEscaping.CRuntimeArgumentRules, "text");
+            var response = m_graphBuilder.HandleOperationAsync(operation, arguments, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.Equal(GraphOperationResponseStatus.InvalidRequest, response.Status);
+            Assert.Contains("no wire-format arguments", response.Error);
+        }
+
+        [Fact]
+        public void StructuredContentCannotSilentlyOverrideWireContent()
+        {
+            var operation = new GraphOperation
+            {
+                OperationId = 1,
+                ProtocolVersion = DirectGraphProtocol.Version,
+                AddWriteFile = new AddWriteFileRequest { Content = Text("wire") },
+            };
+            var content = PipDataBuilder.CreatePipData(m_context.StringTable, string.Empty, PipDataFragmentEscaping.NoEscaping, "text");
+            var response = m_graphBuilder.HandleOperationAsync(operation, content, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.Equal(GraphOperationResponseStatus.InvalidRequest, response.Status);
+            Assert.Contains("no wire-format content", response.Error);
+        }
 
         [Fact]
         public void EveryPipKindIsConstructedAndCarriesItsOwnProvenance()

@@ -134,6 +134,13 @@ namespace BuildXL.Engine.DirectGraph
 
         /// <inheritdoc />
         public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, CancellationToken cancellationToken)
+            => HandleOperationAsync(operation, PipData.Invalid, cancellationToken);
+
+        /// <summary>
+        /// Handles an in-process text operation with optional structured process arguments or write-file content,
+        /// without extending the wire protocol.
+        /// </summary>
+        public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, PipData data, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -148,12 +155,12 @@ namespace BuildXL.Engine.DirectGraph
                 m_counters.IncrementCounter(countCounter);
                 using (m_counters.StartStopwatch(durationCounter))
                 {
-                    response = HandleOperation(operation);
+                    response = HandleOperation(operation, data);
                 }
             }
             else
             {
-                response = HandleOperation(operation);
+                response = HandleOperation(operation, data);
             }
 
             WithProtocolVersion(response);
@@ -166,11 +173,11 @@ namespace BuildXL.Engine.DirectGraph
             return Task.FromResult(response);
         }
 
-        private GraphOperationResponse HandleOperation(GraphOperation operation) =>
+        private GraphOperationResponse HandleOperation(GraphOperation operation, PipData data) =>
             // m_firstRejection is read before dispatching, because dispatching is what sets it.
             m_firstRejection != null ? AlreadyFailed(operation.OperationId) :
             operation.ProtocolVersion != DirectGraphProtocol.Version ? VersionMismatch(operation) :
-            Dispatch(operation);
+            Dispatch(operation, data);
 
         private static bool TryGetOperationCounters(
             GraphOperation.OperationOneofCase operationCase,
@@ -207,7 +214,7 @@ namespace BuildXL.Engine.DirectGraph
             }
         }
 
-        private GraphOperationResponse Dispatch(GraphOperation operation)
+        private GraphOperationResponse Dispatch(GraphOperation operation, PipData data)
         {
             ulong operationId = operation.OperationId;
 
@@ -215,10 +222,17 @@ namespace BuildXL.Engine.DirectGraph
             {
                 Accept(operation);
 
+                if (data.IsValid && !(operation.AddProcess != null
+                    ? operation.AddProcess.Arguments.Count == 0
+                    : operation.AddWriteFile != null && !operation.AddWriteFile.HasContent))
+                {
+                    throw new InvalidRequestException("Structured data requires a process with no wire-format arguments or a write-file operation with no wire-format content.");
+                }
+
                 return operation.OperationCase switch
                 {
-                    GraphOperation.OperationOneofCase.AddProcess => AddProcess(operationId, operation.AddProcess),
-                    GraphOperation.OperationOneofCase.AddWriteFile => AddWriteFile(operationId, operation.AddWriteFile),
+                    GraphOperation.OperationOneofCase.AddProcess => AddProcess(operationId, operation.AddProcess, data),
+                    GraphOperation.OperationOneofCase.AddWriteFile => AddWriteFile(operationId, operation.AddWriteFile, data),
                     GraphOperation.OperationOneofCase.AddCopyFile => AddCopyFile(operationId, operation.AddCopyFile),
                     GraphOperation.OperationOneofCase.AddSealDirectory => AddSealDirectory(operationId, operation.AddSealDirectory),
                     GraphOperation.OperationOneofCase.AddCompositeSharedOpaqueDirectory => AddCompositeSharedOpaqueDirectory(operationId, operation.AddCompositeSharedOpaqueDirectory),
@@ -291,7 +305,7 @@ namespace BuildXL.Engine.DirectGraph
             }
         }
 
-        private GraphOperationResponse AddProcess(ulong operationId, AddProcessRequest request)
+        private GraphOperationResponse AddProcess(ulong operationId, AddProcessRequest request, PipData arguments)
         {
             if (!TryGetPipConstructionHelper(operationId, request.Module, request.Symbol, out var pipConstructionHelper, out var failure))
             {
@@ -336,9 +350,16 @@ namespace BuildXL.Engine.DirectGraph
                 };
             }
 
-            foreach (uint argument in request.Arguments)
+            if (arguments.IsValid)
             {
-                processBuilder.ArgumentsBuilder.Add(PipDataAtom.FromStringId(ResolveString(argument, "arguments")));
+                processBuilder.ArgumentsBuilder.Add(arguments);
+            }
+            else
+            {
+                foreach (uint argument in request.Arguments)
+                {
+                    processBuilder.ArgumentsBuilder.Add(PipDataAtom.FromStringId(ResolveString(argument, "arguments")));
+                }
             }
 
             foreach (var input in request.InputFiles)
@@ -470,7 +491,7 @@ namespace BuildXL.Engine.DirectGraph
             return Success(operationId, process.SemiStableHash);
         }
 
-        private GraphOperationResponse AddWriteFile(ulong operationId, AddWriteFileRequest request)
+        private GraphOperationResponse AddWriteFile(ulong operationId, AddWriteFileRequest request, PipData content)
         {
             if (!TryGetPipConstructionHelper(operationId, request.Module, request.Symbol, out var pipConstructionHelper, out var failure))
             {
@@ -479,12 +500,16 @@ namespace BuildXL.Engine.DirectGraph
 
             var destination = RequiredPath(request.HasDestination, request.Destination, "destination");
 
-            var contentBuilder = new PipDataBuilder(m_pathTable.StringTable);
-            contentBuilder.Add(RequiredString(request.HasContent, request.Content, "content"));
+            if (!content.IsValid)
+            {
+                var contentBuilder = new PipDataBuilder(m_pathTable.StringTable);
+                contentBuilder.Add(RequiredString(request.HasContent, request.Content, "content"));
+                content = contentBuilder.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping);
+            }
 
             if (!pipConstructionHelper.TryWriteFile(
                     destination,
-                    contentBuilder.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping),
+                    content,
                     WriteFileEncoding.Utf8,
                     ResolveStrings(request.Tags, "tags"),
                     description: OptionalStringValue(request.HasDescription, request.Description, "description"),
