@@ -162,8 +162,7 @@ namespace BuildXL.Scheduler.Fingerprints
 
                 int numAbsentPathsEliminated = 0;
 
-                var sourceDirectoriesAllDirectories = processingState.SourceDirectoriesAllDirectories;
-                var sourceDirectoriesTopDirectoryOnly = processingState.SourceDirectoriesTopDirectoryOnly;
+                SourceSealDirectoryIndex sourceDirectories;
                 var dynamicObservations = processingState.DynamicObservations;
                 var allowedUndeclaredSourceReads = processingState.AllowedUndeclaredReads;
                 var directoryDependencyContentsFilePaths = processingState.DirectoryDependencyContentsFilePaths;
@@ -173,6 +172,8 @@ namespace BuildXL.Scheduler.Fingerprints
                 var bitSetSize = BitSet.RoundToValidBitCount(observations.Length);
                 var observationsUnderSourceSealDirectories = new BitSet(bitSetSize);
                 observationsUnderSourceSealDirectories.SetLength(bitSetSize);
+                var excludedSourceSealObservations = new BitSet(bitSetSize);
+                excludedSourceSealObservations.SetLength(bitSetSize);
                 var outOfSourceSealObservations = new BitSet(bitSetSize);
                 outOfSourceSealObservations.SetLength(bitSetSize);
                 HashSet<AbsolutePath> possiblyBadAccesses;
@@ -226,16 +227,12 @@ namespace BuildXL.Scheduler.Fingerprints
                             }
                             if (environment.IsSourceSealedDirectory(directoryDependency, out var allDirectories, out var patterns, out var exclusions))
                             {
-                                if (allDirectories)
-                                {
-                                    sourceDirectoriesAllDirectories.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, false, exclusions));
-                                }
-                                else
-                                {
-                                    sourceDirectoriesTopDirectoryOnly.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, true, exclusions));
-                                }
+                                processingState.SourceDirectories.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, !allDirectories, exclusions));
                             }
+
                         }
+
+                        sourceDirectories = environment.GetSourceSealDirectoryIndex(pip.UnderlyingPip.PipId, processingState.SourceDirectories);
                     }
 
                     // We have observed path accesses, but need to match them up to file artifacts.
@@ -256,50 +253,29 @@ namespace BuildXL.Scheduler.Fingerprints
                                 continue;
                             }
 
-                            // Check to see if the observation is under a topDirectoryOnly Sealed Source Directories
-                            bool underSealedSource = false;
                             var flags = target.GetObservationFlags(observations[i]);
                             bool allowExactExcludedProbe = (flags & ObservationFlags.FileProbe) != 0
                                 && (flags & ObservationFlags.Enumeration) == 0;
-                            for (int j = 0; j < sourceDirectoriesTopDirectoryOnly.Count && !underSealedSource; j++)
+                            var sourceSealMatch = sourceDirectories.Match(pathTable, path, ref processingState.SourceSealLookupCache, allowExactExcludedProbe);
+                            if (sourceSealMatch == SourceSealMatch.Included || sourceSealMatch == SourceSealMatch.Root)
                             {
-                                var sourceSealWithPatterns = sourceDirectoriesTopDirectoryOnly[j];
-                                if (sourceSealWithPatterns.Contains(pathTable, path, allowExactExcludedProbe: allowExactExcludedProbe))
-                                {
-                                    underSealedSource = true;
-                                    observationsUnderSourceSealDirectories.Add(i);
-                                }
-                                else if (path == sourceSealWithPatterns.Path)
-                                {
-                                    // Consider the sealed directory itself as a dynamic observation as this likely
-                                    // is an enumeration we want to capture for caching
-                                    observationsUnderSourceSealDirectories.Add(i);
-                                }
+                                observationsUnderSourceSealDirectories.Add(i);
                             }
 
-                            // Check to see if the observation is under one of the AllDirectory Sealed Source Directories
-                            for (int j = 0; j < sourceDirectoriesAllDirectories.Count && !underSealedSource; j++)
+                            if (sourceSealMatch == SourceSealMatch.Excluded)
                             {
-                                var sourceSealWithPatterns = sourceDirectoriesAllDirectories[j];
-                                if (sourceSealWithPatterns.Contains(pathTable, path, allowExactExcludedProbe: allowExactExcludedProbe))
-                                {
-                                    // Note the directories themselves are never part of the seal.
-                                    underSealedSource = true;
-                                    observationsUnderSourceSealDirectories.Add(i);
-                                }
-                                else if (path == sourceSealWithPatterns.Path)
-                                {
-                                    // Consider the sealed directory itself as a dynamic observation as this likely
-                                    // is an enumeration we want to capture for caching
-                                    observationsUnderSourceSealDirectories.Add(i);
-                                }
+                                excludedSourceSealObservations.Add(i);
                             }
 
-                            if (!underSealedSource)
+                            if (sourceSealMatch != SourceSealMatch.Included)
                             {
                                 observationArtifacts.Add(path);
                             }
+
                         }
+
+                        environment.Counters.AddToCounter(PipExecutorCounter.SourceSealLookupCacheHits, processingState.SourceSealLookupCache.Hits);
+                        environment.Counters.AddToCounter(PipExecutorCounter.SourceSealLookupCacheMisses, processingState.SourceSealLookupCache.Misses);
                     }
 
                     // Note that we validated the sort order of 'observations' above w.r.t expanded order, but need
@@ -393,7 +369,7 @@ namespace BuildXL.Scheduler.Fingerprints
                                     "Observation is either a file or a directory found to be under a seal directory, although the file may not exist physically, " +
                                     "or possibly bad access (probing or reading a file that is not specified as a dependency), or possibly directory enumeration. " +
                                     (debugTrace.Enabled ? ("[DebugTrace: " + debugTrace.ToString() + "]") : "") +
-                                    GetDiagnosticsInfo(path, pip, pathTable, directoryDependencyContentsFilePaths, sourceDirectoriesTopDirectoryOnly, sourceDirectoriesAllDirectories, observationFlags));
+                                    GetDiagnosticsInfo(path, pip, pathTable, directoryDependencyContentsFilePaths, sourceDirectories, observationFlags));
                             }
                         }
 
@@ -493,7 +469,7 @@ namespace BuildXL.Scheduler.Fingerprints
 
                                 ObservedInputAccessCheckFailureAction accessCheckFailureResult = target.OnAccessCheckFailure(
                                     observation,
-                                    fromTopLevelDirectory: sourceDirectoriesTopDirectoryOnly.Any(a => a.Contains(pathTable, path, isTopDirectoryOnlyOverride: false)));
+                                    fromTopLevelDirectory: sourceDirectories.IsUnderTopDirectoryOnly(pathTable, path));
                                 HandleFailureResult(accessCheckFailureResult, ref status, ref invalid);
                                 continue;
                             }
@@ -538,10 +514,7 @@ namespace BuildXL.Scheduler.Fingerprints
                                 }
                             }
                             else if (type == ObservedInputType.FileContentRead || type == ObservedInputType.ExistingFileProbe
-                                || sourceDirectoriesTopDirectoryOnly.Concat(sourceDirectoriesAllDirectories).Any(
-                                    seal => seal.Exclusions.Contains(pathTable, seal.Path, path,
-                                        allowExactProbe: (observationFlags & ObservationFlags.FileProbe) != 0
-                                            && (observationFlags & ObservationFlags.Enumeration) == 0)))
+                                || excludedSourceSealObservations.Contains(i))
                             {
                                 debugTrace.AppendLine($"type == ObservedInputType.FileContentRead || type == ObservedInputType.ExistingFileProbe");
 
@@ -550,7 +523,7 @@ namespace BuildXL.Scheduler.Fingerprints
                                 {
                                     accessCheckFailureResult = target.OnAccessCheckFailure(
                                         observation,
-                                        fromTopLevelDirectory: sourceDirectoriesTopDirectoryOnly.Any(a => a.Contains(pathTable, path, isTopDirectoryOnlyOverride: false)));
+                                        fromTopLevelDirectory: sourceDirectories.IsUnderTopDirectoryOnly(pathTable, path));
                                 }
 
                                 HandleFailureResult(accessCheckFailureResult, ref status, ref invalid);
@@ -644,7 +617,7 @@ namespace BuildXL.Scheduler.Fingerprints
                         {
                             var debugInfo = debugTrace.Enabled ? debugTrace.ToString() : string.Empty;
                             Contract.Assert(false, "If the access is a file content read, then the FileContentInfo cannot be null. Diagnostics:" + debugInfo +
-                                GetDiagnosticsInfo(path, pip, pathTable, directoryDependencyContentsFilePaths, sourceDirectoriesTopDirectoryOnly, sourceDirectoriesAllDirectories, flags));
+                                GetDiagnosticsInfo(path, pip, pathTable, directoryDependencyContentsFilePaths, sourceDirectories, flags));
                         }
 
                         if (type == ObservedInputType.AbsentPathProbe)
@@ -982,28 +955,10 @@ namespace BuildXL.Scheduler.Fingerprints
             CacheablePipInfo pip,
             PathTable pathTable,
             HashSet<AbsolutePath> sealContents,
-            List<SourceSealWithPatterns> sourceDirectoriesTopDirectoryOnly,
-            List<SourceSealWithPatterns> sourceDirectoriesAllDirectories,
+            SourceSealDirectoryIndex sourceDirectories,
             ObservationFlags flags)
         {
-            bool isUnderSourceSeal = false;
-            for (int j = 0; j < sourceDirectoriesTopDirectoryOnly.Count && !isUnderSourceSeal; j++)
-            {
-                var sourceDirectory = sourceDirectoriesTopDirectoryOnly[j].Path;
-                if (path.GetParent(pathTable) == sourceDirectory)
-                {
-                    isUnderSourceSeal = true;
-                }
-            }
-
-            for (int j = 0; j < sourceDirectoriesAllDirectories.Count && !isUnderSourceSeal; j++)
-            {
-                var sourceDirectory = sourceDirectoriesAllDirectories[j].Path;
-                if (path != sourceDirectory && path.IsWithin(pathTable, sourceDirectory))
-                {
-                    isUnderSourceSeal = true;
-                }
-            }
+            bool isUnderSourceSeal = sourceDirectories.Match(pathTable, path) == SourceSealMatch.Included;
 
             var isUnderSeal = sealContents.Contains(path);
 
@@ -1424,6 +1379,9 @@ namespace BuildXL.Scheduler.Fingerprints
         /// See <see cref="IPipExecutionEnvironment.IsSourceSealedDirectory"/>
         /// </summary>
         bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions);
+
+        /// <summary>Gets the index shared by processes with equivalent source-seal policies.</summary>
+        SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals);
 
         /// <summary>
         /// Returns whether there is (by walking the path upwards) an output directory -shared or exclusive- containing <paramref name="path"/>
@@ -1932,6 +1890,10 @@ namespace BuildXL.Scheduler.Fingerprints
         {
             return m_env.IsSourceSealedDirectory(directoryArtifact, out allDirectories, out patterns, out exclusions);
         }
+
+        /// <inheritdoc />
+        public SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals) =>
+            m_env.PipTable.SourceSealDirectoryIndices.GetOrAdd(Context.PathTable, seals, pipId);
 
         /// <inheritdoc />
         public bool IsPathUnderOutputDirectory(AbsolutePath path)

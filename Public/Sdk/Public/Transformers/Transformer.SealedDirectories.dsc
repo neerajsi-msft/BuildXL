@@ -100,13 +100,10 @@ namespace Transformer {
          * Excluded entries remain visible in parent enumerations. Exact existence/type probes
          * are allowed, but reads, enumeration of an excluded directory, and descendant probes are not.
          * Other explicitly declared inputs can authorize an excluded path.
+         * Paths are literal and relative to root, not names matched at every depth.
+         * Exclusions cannot contain another source root consumed by the same process.
          */
         excludedPaths?: RelativePath[],
-
-        /** File or directory entry names excluded at every depth, e.g. [a`.git`].
-         * Has the same access and enumeration semantics as excludedPaths.
-         */
-        excludedNames?: PathAtom[],
 
         /** Optional options for which files to seal. The default is 'topDirectoryOnly' */
         include?: "topDirectoryOnly" | "allDirectories",

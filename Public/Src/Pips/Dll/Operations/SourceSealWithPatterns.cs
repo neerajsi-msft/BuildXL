@@ -1,19 +1,20 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System;
 using System.Diagnostics.ContractsLight;
+using System.Linq;
 using BuildXL.Native.IO;
 using BuildXL.Utilities;
 using BuildXL.Utilities.Core;
 using BuildXL.Utilities.Collections;
-using BuildXL.Pips.Operations;
 
-namespace BuildXL.Scheduler.Fingerprints
+namespace BuildXL.Pips.Operations
 {
     /// <summary>
     /// Source seal directory path with list of wildcard patterns
     /// </summary>
-    public readonly struct SourceSealWithPatterns
+    public readonly struct SourceSealWithPatterns : IEquatable<SourceSealWithPatterns>
     {
         /// <summary>
         /// Source seal directory path
@@ -41,9 +42,41 @@ namespace BuildXL.Scheduler.Fingerprints
             Contract.Requires(path.IsValid);
 
             Path = path;
-            Patterns = patterns;
+            Patterns = patterns.IsValid ? patterns : ReadOnlyArray<StringId>.Empty;
             IsTopDirectoryOnly = isTopDirectoryOnly;
             Exclusions = exclusions ?? SourceSealExclusions.Empty;
+        }
+
+        /// <inheritdoc />
+        public bool Equals(SourceSealWithPatterns other) =>
+            Path == other.Path && (!Path.IsValid ||
+                (IsTopDirectoryOnly == other.IsTopDirectoryOnly
+                && Patterns.SequenceEqual(other.Patterns)
+                && Exclusions.Paths.SequenceEqual(other.Exclusions.Paths)));
+
+        /// <inheritdoc />
+        public override bool Equals(object obj) => obj is SourceSealWithPatterns other && Equals(other);
+
+        /// <inheritdoc />
+        public override int GetHashCode()
+        {
+            if (!Path.IsValid)
+            {
+                return 0;
+            }
+
+            int hash = HashCodeHelper.Combine(Path.GetHashCode(), IsTopDirectoryOnly ? 1 : 0);
+            foreach (var pattern in Patterns)
+            {
+                hash = HashCodeHelper.Combine(hash, pattern.GetHashCode());
+            }
+
+            foreach (var path in Exclusions.Paths)
+            {
+                hash = HashCodeHelper.Combine(hash, path.GetHashCode());
+            }
+
+            return hash;
         }
 
         /// <summary>
@@ -83,6 +116,12 @@ namespace BuildXL.Scheduler.Fingerprints
                 return false;
             }
 
+            return MatchesPatterns(pathTable, childPath);
+        }
+
+        /// <summary>Matches basename patterns after the caller has resolved scope and exclusions.</summary>
+        internal bool MatchesPatterns(PathTable pathTable, AbsolutePath childPath)
+        {
             if (!Patterns.IsValid || Patterns.Length == 0)
             {
                 return true;

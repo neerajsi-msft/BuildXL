@@ -18,14 +18,11 @@ namespace BuildXL.Utilities.Configuration.Mutable
         {
             Root = remapper.Remap(template.Root);
             ExcludedPaths = template.ExcludedPaths?.Select(path => remapper.Remap(path)).ToArray();
-            ExcludedNames = template.ExcludedNames?.Select(name => remapper.Remap(name)).ToArray();
         }
 
         /// <inheritdoc />
         public AbsolutePath Root { get; set; }
         /// <inheritdoc />
         public IReadOnlyList<RelativePath> ExcludedPaths { get; set; }
-        /// <inheritdoc />
-        public IReadOnlyList<PathAtom> ExcludedNames { get; set; }
     }
 }

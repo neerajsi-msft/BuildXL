@@ -1417,11 +1417,9 @@ namespace Test.BuildXL.Scheduler
                        new FingerprintingTypeDescriptor<SourceSealExclusions>(
                            SourceSealExclusions.Empty,
                            new SourceSealExclusions(
-                               ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(stringTable, "private/state") }),
-                               ReadOnlyArray<PathAtom>.Empty),
+                               ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(stringTable, "private/state") })),
                            new SourceSealExclusions(
-                               ReadOnlyArray<RelativePath>.Empty,
-                               ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(stringTable, ".git") }))),
+                               ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(stringTable, ".git") }))),
 
                        // File artifact arrays are special relative to other arrays due to a need for mutual-exclusion (the same file artifact cannot appear in an array with e.g. different content hashes).
                        new FingerprintingTypeDescriptor<ReadOnlyArray<FileArtifact>>(

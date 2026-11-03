@@ -15,7 +15,5 @@ namespace BuildXL.Utilities.Configuration
         /// <summary>Root-relative excluded files or subtrees.</summary>
         IReadOnlyList<RelativePath> ExcludedPaths { get; }
 
-        /// <summary>Entry names excluded at every depth.</summary>
-        IReadOnlyList<PathAtom> ExcludedNames { get; }
     }
 }

@@ -99,5 +99,6 @@ namespace BuildXL.Pips.Tracing
         CredentialsDetectedInEnvVar = 14420,
         CredScanFailedToComplete = 14421,
         PipFilterEvaluationMode = 14422,
+        ScheduleFailAddPipSourceSealRootUnderExclusion = 14423,
     }
 }

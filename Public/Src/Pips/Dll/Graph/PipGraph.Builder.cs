@@ -1273,7 +1273,8 @@ namespace BuildXL.Pips.Graph
                     return false;
                 }
 
-                if (ipcPip.DirectoryDependencies.Any(d => !IsValidInputDirectoryArtifact(pathAccessLock, d, ipcPip)))
+                if (ipcPip.DirectoryDependencies.Any(d => !IsValidInputDirectoryArtifact(pathAccessLock, d, ipcPip))
+                    || !ValidateSourceSealExclusions(ipcPip, ipcPip.DirectoryDependencies, out _))
                 {
                     return false;
                 }
@@ -1301,11 +1302,13 @@ namespace BuildXL.Pips.Graph
                 Process process,
                 LockManager.PathAccessGroupLock pathAccessLock,
                 out Dictionary<AbsolutePath, FileArtifact> dependenciesByPath,
-                out Dictionary<AbsolutePath, FileArtifact> outputsByPath)
+                out Dictionary<AbsolutePath, FileArtifact> outputsByPath,
+                out SourceSealDirectoryIndex sourceDirectoryIndex)
             {
                 Contract.Requires(process != null, "Argument process cannot be null");
 
                 var semanticPathExpander = SemanticPathExpander.GetModuleExpander(process.Provenance.ModuleId);
+                sourceDirectoryIndex = null;
                 dependenciesByPath = new Dictionary<AbsolutePath, FileArtifact>(process.Dependencies.Length);
                 outputsByPath = new Dictionary<AbsolutePath, FileArtifact>(process.FileOutputs.Length);
                 var outputDirectorySet = new HashSet<AbsolutePath>();
@@ -1330,7 +1333,8 @@ namespace BuildXL.Pips.Graph
                     }
                 }
 
-                if (process.DirectoryDependencies.Any(d => !IsValidInputDirectoryArtifact(pathAccessLock, d, process)))
+                if (process.DirectoryDependencies.Any(d => !IsValidInputDirectoryArtifact(pathAccessLock, d, process))
+                    || !ValidateSourceSealExclusions(process, process.DirectoryDependencies, out sourceDirectoryIndex))
                 {
                     return false;
                 }
@@ -1476,6 +1480,34 @@ namespace BuildXL.Pips.Graph
                 Contract.Assert(
                     !process.TraceFile.IsValid || outputsByPath.ContainsKey(process.TraceFile.Path),
                     "Output set must contain the trace file, if specified.");
+
+                return true;
+            }
+
+            private bool ValidateSourceSealExclusions(Pip pip, ReadOnlyArray<DirectoryArtifact> directories, out SourceSealDirectoryIndex index)
+            {
+                IEnumerable<SourceSealWithPatterns> GetPolicies()
+                {
+                    foreach (var directory in directories)
+                    {
+                        var pipId = GetSealedDirectoryNode(directory).ToPipId();
+                        var kind = PipTable.GetSealDirectoryKind(pipId);
+                        if (kind.IsSourceSeal())
+                        {
+                            yield return new SourceSealWithPatterns(directory.Path,
+                                PipTable.GetSourceSealDirectoryPatterns(pipId),
+                                kind == SealDirectoryKind.SourceTopDirectoryOnly,
+                                PipTable.GetSourceSealDirectoryExclusions(pipId));
+                        }
+                    }
+                }
+
+                index = PipTable.SourceSealDirectoryIndices.GetOrAdd(Context.PathTable, GetPolicies());
+                if (!index.IsValid)
+                {
+                    LogEventWithPipProvenance(Logger.ScheduleFailAddPipSourceSealRootUnderExclusion, pip, index.ConflictingRoot, index.ConflictingExclusion);
+                    return false;
+                }
 
                 return true;
             }
@@ -2185,7 +2217,7 @@ namespace BuildXL.Pips.Graph
                     Dictionary<AbsolutePath, FileArtifact> dependenciesByPath;
                     Dictionary<AbsolutePath, FileArtifact> outputsByPath;
 
-                    if (!IsValidProcess(process, pathAccessLock, out dependenciesByPath, out outputsByPath))
+                    if (!IsValidProcess(process, pathAccessLock, out dependenciesByPath, out outputsByPath, out var sourceDirectoryIndex))
                     {
                         return false;
                     }
@@ -2201,6 +2233,7 @@ namespace BuildXL.Pips.Graph
 
                     // Sets the PipId, references to process.PipId should not be made before here
                     NodeId processNode = CreateNodeForPip(process);
+                    PipTable.SourceSealDirectoryIndices.Bind(process.PipId, sourceDirectoryIndex);
 
                     var edgeScope = process.IsStartOrShutdownKind || process.ServiceInfo?.Kind == ServicePipKind.ServiceFinalization
                         ? null

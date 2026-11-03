@@ -18,22 +18,21 @@ const sourceAll = Transformer.sealSourceDirectory(d`dir2`, SealSourceDirectoryOp
 
 ### Excluding files and subtrees
 
-The object form accepts `excludedPaths` (nonempty paths relative to the seal root)
-and `excludedNames` (entry names matched at every depth). Both exclude the entry
-itself and its entire subtree from the seal's read authorization:
+The object form accepts `excludedPaths`: nonempty literal paths relative to the
+seal root. Each excludes the entry itself and its entire subtree:
 
 ```ts
 const sources = Transformer.sealSourceDirectory({
     root: d`repo`,
     include: "allDirectories",
-    excludedPaths: [r`private/build-state`],
-    excludedNames: [a`.git`],
+    excludedPaths: [r`private/build-state`, r`.git`, r`subrepo/.git`],
 });
 ```
 
 These are component-aware literal matches, not wildcard or Gitignore patterns.
-For example, excluding `.git` also covers nested repositories and `.git` pointer
-files, but does not exclude `.github` or `.gitignore`.
+For example, excluding `.git` covers only `repo/.git`, whether a directory or a
+pointer file. It does not exclude `repo/subrepo/.git`, `.github` or `.gitignore`.
+Nested repository metadata requires an explicit path such as `subrepo/.git`.
 
 Exclusions do not hide filesystem entries. Enumerating an allowed parent still
 observes the excluded name, and adding, removing, or renaming that name affects
@@ -46,9 +45,33 @@ this seal. On Linux eBPF, `TreatStatAsProbe=false` classifies `stat` as a read a
 therefore requires read authorization. It does not fingerprint every metadata
 field returned by `stat`.
 
-An exclusion restricts only this seal's grant: a separately declared file input
-or another directory input may authorize the same path. It is not a global deny,
-an untracked scope, or a mechanism for banning a particular executable.
+Within a process's source-directory dependencies, the deepest declared root
+governs scope and basename patterns. A nonmatching deeper policy does not fall
+back to a broader seal. Policies at the same root combine their inclusion
+patterns, but exclusions are terminal boundaries: they cannot be bypassed by
+another source seal. Declaring a source root at or below any exclusion in that
+process's source seals is a graph-construction error, independent of declaration
+order.
+
+A separately declared file input, or an explicitly listed member of a regular
+sealed directory, can still authorize a file. Exclusions are not global denies,
+untracked scopes, or a mechanism for banning a particular executable. Processes
+with different source-directory policies are validated independently.
+
+The scheduler indexes roots and exclusions by interned paths and walks an
+observation's ancestors to find its policy. Equivalent source-policy sets share
+one immutable, validated index for the pip table's lifetime, regardless of seal
+artifact IDs or declaration order. Graph construction binds each process to that
+index; access processing and cache lookup reuse it. Loading a saved graph rebuilds
+these derived indexes on demand, once per distinct policy set.
+
+Each observation-processing pass also keeps one matched boundary node. Sibling
+observations reuse their parent directory's node, but still check the observed
+entry for a nested root or exclusion. Subtree reuse is allowed only when the
+cached node has no child policy boundaries, including exclusions contributed by
+broader seals. Patterns, top-only scope and exact-probe flags are reevaluated for
+every access. This optimization does not depend on observation ordering and
+never stores mutable observation state in the shared index.
 
 Ninja projects can declare equivalent recursive dependencies using
 `sourceDirectories`, either on a grouped project or on a single-project resolver:
@@ -56,8 +79,7 @@ Ninja projects can declare equivalent recursive dependencies using
 ```ts
 sourceDirectories: [{
     root: d`repo`,
-    excludedPaths: [r`private/build-state`],
-    excludedNames: [a`.git`],
+    excludedPaths: [r`private/build-state`, r`.git`, r`subrepo/.git`],
 }],
 ```
 

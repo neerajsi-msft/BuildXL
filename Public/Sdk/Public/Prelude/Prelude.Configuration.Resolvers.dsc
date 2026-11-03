@@ -959,10 +959,11 @@ interface JavaScriptCommandDependency {
 interface NinjaSourceDirectory {
     /** Recursive source seal root. Must be under a read-only mount. */
     root: Directory;
-    /** Root-relative file/subtree exclusions, with Transformer.sealSourceDirectory semantics. */
+    /** Literal root-relative exclusions, with Transformer.sealSourceDirectory semantics.
+     * A source root at or below an exclusion
+     * in the same process's source dependencies is invalid.
+     */
     excludedPaths?: RelativePath[];
-    /** Entry names excluded at any depth. Parent enumerations still observe these names. */
-    excludedNames?: PathAtom[];
 }
 
 interface NinjaProject {

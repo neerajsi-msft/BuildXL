@@ -36,8 +36,10 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
                 SourceDirectories = new[] { new NinjaSourceDirectorySettings
                 {
                     Root = sourceRoot,
-                    ExcludedPaths = new[] { RelativePath.Create(PathTable.StringTable, "private/state") },
-                    ExcludedNames = new[] { PathAtom.Create(PathTable.StringTable, ".git") },
+                    ExcludedPaths = new[] {
+                        RelativePath.Create(PathTable.StringTable, "private/state"),
+                        RelativePath.Create(PathTable.StringTable, ".git"),
+                    },
                 } },
             };
             var first = CreateNinjaNode(outputs: Paths("one.out"));
@@ -47,8 +49,7 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
                 .RetrieveScheduledPips().OfType<SealDirectory>());
 
             Assert.Equal(SealDirectoryKind.SourceAllDirectories, seal.Kind);
-            Assert.Single(seal.SourceExclusions.Paths);
-            Assert.Single(seal.SourceExclusions.Names);
+            Assert.Equal(2, seal.SourceExclusions.Paths.Length);
             Assert.Contains(result.RetrieveSuccessfulProcess(first).DirectoryDependencies, directory => directory.Path == sourceRoot);
             Assert.Contains(result.RetrieveSuccessfulProcess(second).DirectoryDependencies, directory => directory.Path == sourceRoot);
             Assert.False(result.RetrieveSuccessfulProcess(first).AllowUndeclaredSourceReads);
@@ -58,8 +59,8 @@ namespace Test.BuildXL.FrontEnd.Ninja.SchedulingTests
             var remapped = new NinjaResolverSettings(settings, new PathRemapper(PathTable, remappedPaths));
             var source = Assert.Single(remapped.SourceDirectories);
             Assert.Equal(sourceRoot.ToString(PathTable), source.Root.ToString(remappedPaths));
-            Assert.Equal("private/state", Assert.Single(source.ExcludedPaths).ToString(remappedPaths.StringTable).Replace('\\', '/'));
-            Assert.Equal(".git", Assert.Single(source.ExcludedNames).ToString(remappedPaths.StringTable));
+            Assert.Equal("private/state", source.ExcludedPaths[0].ToString(remappedPaths.StringTable).Replace('\\', '/'));
+            Assert.Equal(".git", source.ExcludedPaths[1].ToString(remappedPaths.StringTable));
         }
 
         [Theory]

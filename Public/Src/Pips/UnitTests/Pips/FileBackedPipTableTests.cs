@@ -218,8 +218,10 @@ namespace Test.BuildXL.Pips
                 SealDirectoryKind.SourceAllDirectories, PipProvenance.CreateDummy(context),
                 ReadOnlyArray<StringId>.Empty, ReadOnlyArray<StringId>.Empty,
                 sourceExclusions: new SourceSealExclusions(
-                    ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(context.StringTable, "private/state") }),
-                    ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(context.StringTable, ".git") })));
+                    ReadOnlyArray<RelativePath>.From(new[] {
+                        RelativePath.Create(context.StringTable, "private/state"),
+                        RelativePath.Create(context.StringTable, ".git"),
+                    })));
             seal.SetDirectoryArtifact(new DirectoryArtifact(root, 1));
             return seal;
         }
@@ -227,11 +229,12 @@ namespace Test.BuildXL.Pips
         private static void AssertSourceSealExclusions(IPipTable table, PipId pipId, PathTable pathTable)
         {
             var exclusions = table.GetSourceSealDirectoryExclusions(pipId);
-            Assert.Equal(RelativePath.Create(pathTable.StringTable, "private/state"), Assert.Single(exclusions.Paths));
-            Assert.Equal(PathAtom.Create(pathTable.StringTable, ".git"), Assert.Single(exclusions.Names));
+            Assert.Equal(new[] {
+                RelativePath.Create(pathTable.StringTable, "private/state"),
+                RelativePath.Create(pathTable.StringTable, ".git"),
+            }, exclusions.Paths.ToArray());
             var seal = Assert.IsType<SealDirectory>(table.HydratePip(pipId, PipQueryContext.Test));
             Assert.Equal(exclusions.Paths.ToArray(), seal.SourceExclusions.Paths.ToArray());
-            Assert.Equal(exclusions.Names.ToArray(), seal.SourceExclusions.Names.ToArray());
         }
     }
 }

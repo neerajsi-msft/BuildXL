@@ -43,16 +43,18 @@ namespace Test.BuildXL.FrontEnd.Ninja
         }
 
         [TheoryIfSupported(requiresLinuxBasedOperatingSystem: true)]
-        [InlineData(false, false)]
-        [InlineData(false, true)]
-        [InlineData(true, false)]
-        [InlineData(true, true)]
-        public void SourceSealsEnforceExclusionsInBothResolverForms(bool grouped, bool excluded)
+        [InlineData(false, "input.txt", true)]
+        [InlineData(false, ".git/config", false)]
+        [InlineData(false, "nested/.git/config", true)]
+        [InlineData(true, "input.txt", true)]
+        [InlineData(true, ".git/config", false)]
+        [InlineData(true, "nested/.git/config", true)]
+        public void SourceSealsEnforceExclusionsInBothResolverForms(bool grouped, string input, bool succeeds)
         {
             const string project = @"
                 root: d`source`,
                 environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
-                sourceDirectories: [{ root: d`source`, excludedNames: [a`.git`] }],
+                sourceDirectories: [{ root: d`source`, excludedPaths: [r`.git`] }],
             ";
             var projectSettings = grouped ? $"projects: [{{ name: 'source', {project} }}]," : project;
             var config = Build()
@@ -73,16 +75,17 @@ config({{
 }});")
                 .AddSpec(Path.Combine(SourceRoot, "source", "build.ninja"),
                     "rule copy\n  command = mkdir -p ../out && cat " +
-                    (excluded ? ".git/config" : "input.txt") +
+                    input +
                     " > $out\nbuild ../out/result.txt: copy\ndefault ../out/result.txt\n")
                 .AddSpec(Path.Combine(SourceRoot, "source", "input.txt"), "allowed")
                 .AddSpec(Path.Combine(SourceRoot, "source", ".git", "config"), "excluded")
+                .AddSpec(Path.Combine(SourceRoot, "source", "nested", ".git", "config"), "allowed")
                 .PersistSpecsAndGetConfiguration();
             ((CommandLineConfiguration)config).Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = false;
 
             var result = RunEngineWithConfig(config);
-            Assert.Equal(!excluded, result.IsSuccess);
-            if (excluded)
+            Assert.Equal(succeeds, result.IsSuccess);
+            if (!succeeds)
             {
                 AssertVerboseEventLogged(global::BuildXL.Processes.Tracing.LogEventId.PipProcessDisallowedFileAccess, allowMore: true);
                 AssertVerboseEventLogged(global::BuildXL.Scheduler.Tracing.LogEventId.DependencyViolationMissingSourceDependency, allowMore: true);
