@@ -226,8 +226,7 @@ namespace BuildXL.FrontEnd.Ninja
                 foreach (var source in m_sourceDirectories)
                 {
                     var exclusions = new SourceSealExclusions(
-                        ReadOnlyArray<RelativePath>.From(source.ExcludedPaths?.ToArray() ?? Array.Empty<RelativePath>()),
-                        ReadOnlyArray<PathAtom>.From(source.ExcludedNames?.ToArray() ?? Array.Empty<PathAtom>()));
+                        ReadOnlyArray<RelativePath>.From(source.ExcludedPaths?.ToArray() ?? Array.Empty<RelativePath>()));
                     if (!m_pipConstructionHelper.TrySealDirectory(
                         source.Root,
                         CollectionUtilities.EmptySortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>(OrdinalFileArtifactComparer.Instance),

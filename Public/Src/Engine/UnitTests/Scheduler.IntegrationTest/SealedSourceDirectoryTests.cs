@@ -25,7 +25,6 @@ namespace IntegrationTest.BuildXL.Scheduler
 
         [Theory]
         [InlineData(".git/config", false)]
-        [InlineData("nested/.git/config", false)]
         [InlineData("private/state", false)]
         [InlineData(".git/config", true)]
         public void ExcludedReadsRequireAnotherInputGrant(string relativePath, bool explicitlyDeclared)
@@ -151,6 +150,54 @@ namespace IntegrationTest.BuildXL.Scheduler
             RunScheduler().AssertCacheHit(pip.PipId);
         }
 
+        [Theory]
+        [InlineData(".git", false)]
+        [InlineData(".git/nested", false)]
+        [InlineData(".git", true)]
+        [InlineData(".git/nested", true)]
+        public void SourceRootUnderExclusionIsAGraphConstructionError(string relativeRoot, bool reverse)
+        {
+            var root = SourceRootPath.Combine(Context.PathTable, RelativePath.Create(Context.StringTable, relativeRoot));
+            var excluded = SealWithExclusions();
+            var positive = SealDirectory(root, SealDirectoryKind.SourceAllDirectories);
+            var builder = CreatePipBuilder(new[] { Operation.WriteFile(CreateOutputFileArtifact()) });
+            builder.AddInputDirectory(reverse ? positive : excluded);
+            builder.AddInputDirectory(reverse ? excluded : positive);
+            Assert.True(builder.TryFinish(PipConstructionHelper, out var process, out _));
+            Assert.False(PipGraphBuilder.AddProcess(process));
+            AssertErrorEventLogged(global::BuildXL.Pips.Tracing.LogEventId.ScheduleFailAddPipSourceSealRootUnderExclusion);
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public void DeepestSourceSealControlsObservedReads(bool passingPattern, bool reverse)
+        {
+            var nested = SourceRootPath.Combine(Context.PathTable, "nested");
+            var source = FileArtifact.CreateSourceFile(nested.Combine(Context.PathTable, passingPattern ? "file.cs" : "file.h"));
+            WriteSourceFile(source);
+            var broad = SealDirectory(SourceRootPath, SealDirectoryKind.SourceAllDirectories);
+            var narrow = PipGraphBuilder.AddSealDirectory(CreateSourceSealDirectory(nested, SealDirectoryKind.SourceAllDirectories, "*.cs"));
+            var builder = CreatePipBuilder(new[] {
+                Operation.ReadFile(source, doNotInfer: true),
+                Operation.WriteFile(CreateOutputFileArtifact()),
+            });
+            builder.AddInputDirectory(reverse ? narrow : broad);
+            builder.AddInputDirectory(reverse ? broad : narrow);
+            var pip = SchedulePipBuilder(builder).Process;
+            if (passingPattern)
+            {
+                RunScheduler().AssertCacheMiss(pip.PipId);
+                RunScheduler().AssertCacheHit(pip.PipId);
+            }
+            else
+            {
+                AssertExcludedAccessFails();
+            }
+        }
+
         private DirectoryArtifact SealWithExclusions()
         {
             var seal = new SealDirectory(
@@ -160,8 +207,10 @@ namespace IntegrationTest.BuildXL.Scheduler
                 SealDirectoryKind.SourceAllDirectories, CreateProvenance(),
                 ReadOnlyArray<StringId>.Empty, ReadOnlyArray<StringId>.Empty,
                 sourceExclusions: new SourceSealExclusions(
-                    ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(Context.StringTable, "private/state") }),
-                    ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(Context.StringTable, ".git") })));
+                    ReadOnlyArray<RelativePath>.From(new[] {
+                        RelativePath.Create(Context.StringTable, "private/state"),
+                        RelativePath.Create(Context.StringTable, ".git"),
+                    })));
             return PipGraphBuilder.AddSealDirectory(seal);
         }
 

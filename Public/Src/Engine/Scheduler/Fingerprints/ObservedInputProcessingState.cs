@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using BuildXL.Pips.Operations;
 using BuildXL.Utilities.Core;
 
 namespace BuildXL.Scheduler.Fingerprints
@@ -19,8 +20,8 @@ namespace BuildXL.Scheduler.Fingerprints
         // NOTE: Be sure to add any collections created here to Clear
         public readonly Dictionary<AbsolutePath, ObservedInputType> AllowedUndeclaredReads = new Dictionary<AbsolutePath, ObservedInputType>();
         public readonly List<(AbsolutePath path, DynamicObservationKind observationType)> DynamicObservations = new List<(AbsolutePath, DynamicObservationKind)>();
-        public readonly List<SourceSealWithPatterns> SourceDirectoriesAllDirectories = new List<SourceSealWithPatterns>();
-        public readonly List<SourceSealWithPatterns> SourceDirectoriesTopDirectoryOnly = new List<SourceSealWithPatterns>();
+        public readonly List<SourceSealWithPatterns> SourceDirectories = new List<SourceSealWithPatterns>();
+        public SourceSealDirectoryIndex.LookupCache SourceSealLookupCache;
         public readonly HashSet<AbsolutePath> ObservationArtifacts = new HashSet<AbsolutePath>();
         public readonly HashSet<AbsolutePath> DirectoryDependencyContentsFilePaths = new HashSet<AbsolutePath>();
         public readonly Dictionary<AbsolutePath, (DirectoryMembershipFilter, DirectoryEnumerationMode)> EnumeratedDirectories = new Dictionary<AbsolutePath, (DirectoryMembershipFilter, DirectoryEnumerationMode)>();
@@ -43,8 +44,8 @@ namespace BuildXL.Scheduler.Fingerprints
         {
             DynamicObservations.Clear();
             AllowedUndeclaredReads.Clear();
-            SourceDirectoriesAllDirectories.Clear();
-            SourceDirectoriesTopDirectoryOnly.Clear();
+            SourceDirectories.Clear();
+            SourceSealLookupCache = default;
             ObservationArtifacts.Clear();
             DirectoryDependencyContentsFilePaths.Clear();
             EnumeratedDirectories.Clear();

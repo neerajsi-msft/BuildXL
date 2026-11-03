@@ -297,8 +297,6 @@ namespace BuildXL.Pips.Graph
             {
                 fingerprinter.AddCollection<RelativePath, ReadOnlyArray<RelativePath>>(
                     "ExcludedPaths", sealDirectory.SourceExclusions.Paths, (fp, p) => fp.Add(p.ToString(m_pathTable.StringTable)));
-                fingerprinter.AddCollection<PathAtom, ReadOnlyArray<PathAtom>>(
-                    "ExcludedNames", sealDirectory.SourceExclusions.Names, (fp, p) => fp.Add(p.StringId));
             }
             fingerprinter.Add(nameof(SealDirectory.CompositionActionKind), sealDirectory.CompositionActionKind.ToString());
             fingerprinter.Add(nameof(SealDirectory.ContentFilter), sealDirectory.ContentFilter.HasValue ? $"{sealDirectory.ContentFilter.Value.Kind} {sealDirectory.ContentFilter.Value.Regex}" : "");

@@ -32,20 +32,20 @@ import {Transformer} from 'Sdk.Transformers';
 export const result = Transformer.sealSourceDirectory({
     root: d`.`,
     include: 'allDirectories',
-    excludedPaths: [r`private/state`],
-    excludedNames: [a`.git`],
+    excludedPaths: [r`private/state`, r`.git`],
 });", "result");
 
             var seal = m_pipGraph.RetrieveScheduledPips().OfType<SealDirectory>().Single();
             Assert.Equal(SealDirectoryKind.SourceAllDirectories, seal.Kind);
             Assert.Equal(RelativePath.Create(StringTable, "private/state"), seal.SourceExclusions.Paths[0]);
-            Assert.Equal(PathAtom.Create(StringTable, ".git"), seal.SourceExclusions.Names[0]);
+            Assert.Equal(RelativePath.Create(StringTable, ".git"), seal.SourceExclusions.Paths[1]);
         }
 
         [Theory]
         [InlineData("excludedPaths: [p`absolute`]")]
         [InlineData("excludedPaths: [r``]")]
-        [InlineData("excludedNames: [r`nested/name`]")]
+        [InlineData("excludedPaths: [a`.git`]")]
+        [InlineData("excludedNames: [a`.git`]")]
         public void InvalidExclusionsAreRejected(string property)
         {
             Build().AddSpec(@"

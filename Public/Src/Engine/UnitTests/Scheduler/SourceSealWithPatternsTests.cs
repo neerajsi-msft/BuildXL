@@ -75,11 +75,14 @@ namespace Test.BuildXL.Scheduler
             var pt = new PathTable();
             var root = AbsolutePath.Create(pt, X("/c/source"));
             var exclusions = new SourceSealExclusions(
-                ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, "private/state") }),
-                ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(pt.StringTable, ".git") }));
+                ReadOnlyArray<RelativePath>.From(new[] {
+                    RelativePath.Create(pt.StringTable, "private/state"),
+                    RelativePath.Create(pt.StringTable, ".git"),
+                    RelativePath.Create(pt.StringTable, "subrepo/.git"),
+                }));
             var seal = new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false, exclusions);
 
-            foreach (var path in new[] { ".git", "nested/.git", "private/state" })
+            foreach (var path in new[] { ".git", "subrepo/.git", "private/state" })
             {
                 var excluded = root.Combine(pt, RelativePath.Create(pt.StringTable, path));
                 Assert.False(seal.Contains(pt, excluded));
@@ -89,19 +92,21 @@ namespace Test.BuildXL.Scheduler
                 Assert.False(seal.Contains(pt, child, allowExactExcludedProbe: true));
             }
 
-            foreach (var path in new[] { "public/file", ".github", "nested/.gitignore", "private/stateful", "other/private/state" })
+            foreach (var path in new[] { "public/file", ".github", "nested/.git", "nested/.git/config", "nested/.gitignore", "private/stateful", "other/private/state" })
             {
                 Assert.True(seal.Contains(pt, root.Combine(pt, RelativePath.Create(pt.StringTable, path))));
             }
         }
 
-        [Fact]
-        public void ExclusionsRoundTrip()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ExclusionsRoundTrip(bool empty)
         {
             var pt = new PathTable();
             var exclusions = new SourceSealExclusions(
-                ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, "private/state") }),
-                ReadOnlyArray<PathAtom>.From(new[] { PathAtom.Create(pt.StringTable, ".git") }));
+                empty ? ReadOnlyArray<RelativePath>.Empty
+                    : ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, "private/state") }));
             using (var stream = new System.IO.MemoryStream())
             {
                 using (var writer = new BuildXLWriter(false, stream, true, false))
@@ -114,7 +119,7 @@ namespace Test.BuildXL.Scheduler
                 {
                     var restored = SourceSealExclusions.Deserialize(reader);
                     Assert.Equal(exclusions.Paths.ToArray(), restored.Paths.ToArray());
-                    Assert.Equal(exclusions.Names.ToArray(), restored.Names.ToArray());
+                    Assert.Equal(empty, restored.IsEmpty);
                 }
             }
         }
@@ -134,6 +139,206 @@ namespace Test.BuildXL.Scheduler
             {
                 AssertTrue(!SourceSealWithPatterns.SingleWildcardPatternMatch(filename, pattern), $"File name, '{filename}' passes the pattern, '{pattern}'");
             }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void IndexUsesDeepestRootAndTerminalLiteralExclusions(bool reverse)
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var nested = root.Combine(pt, "nested");
+            var broad = new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false,
+                new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] {
+                    RelativePath.Create(pt.StringTable, ".git"),
+                    RelativePath.Create(pt.StringTable, "nested/private"),
+                })));
+            var narrow = new SourceSealWithPatterns(nested,
+                ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.cs") }), true);
+            var index = new SourceSealDirectoryIndex(pt, reverse ? new[] { narrow, broad } : new[] { broad, narrow });
+
+            Assert.True(index.IsValid);
+            foreach (var path in new[] { ".git/config", "nested/private", "nested/private/file.cs" })
+            {
+                Assert.Equal(SourceSealMatch.Excluded, index.Match(pt, root.Combine(pt, RelativePath.Create(pt.StringTable, path))));
+            }
+
+            Assert.Equal(SourceSealMatch.Included, index.Match(pt, nested.Combine(pt, "file.cs")));
+            Assert.Equal(SourceSealMatch.None, index.Match(pt, nested.Combine(pt, "file.h")));
+            Assert.Equal(SourceSealMatch.None, index.Match(pt, nested.Combine(pt, RelativePath.Create(pt.StringTable, "deep/file.cs"))));
+            Assert.True(index.IsUnderTopDirectoryOnly(pt, nested.Combine(pt, RelativePath.Create(pt.StringTable, "deep/file.cs"))));
+            Assert.Equal(SourceSealMatch.Root, index.Match(pt, root));
+            Assert.Equal(SourceSealMatch.Root, index.Match(pt, nested));
+            Assert.Equal(SourceSealMatch.Included, index.Match(pt, root.Combine(pt, ".github")));
+            Assert.Equal(SourceSealMatch.Included, index.Match(pt, root.Combine(pt, ".git"), allowExactExcludedProbe: true));
+            Assert.Equal(SourceSealMatch.Excluded, index.Match(pt, root.Combine(pt, RelativePath.Create(pt.StringTable, ".git/config")), allowExactExcludedProbe: true));
+        }
+
+        [Theory]
+        [InlineData("private")]
+        [InlineData("private/nested")]
+        public void IndexRejectsRootsAtOrBelowExclusions(string relativeRoot)
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var excluded = root.Combine(pt, "private");
+            var positive = root.Combine(pt, RelativePath.Create(pt.StringTable, relativeRoot));
+            var seals = new[] {
+                new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false,
+                    new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, "private") }))),
+                new SourceSealWithPatterns(positive, ReadOnlyArray<StringId>.Empty, false),
+            };
+
+            foreach (var ordered in new[] { seals, new[] { seals[1], seals[0] } })
+            {
+                var index = new SourceSealDirectoryIndex(pt, ordered);
+                Assert.False(index.IsValid);
+                Assert.Equal(positive, index.ConflictingRoot);
+                Assert.Equal(excluded, index.ConflictingExclusion);
+            }
+        }
+
+        [Fact]
+        public void PolicyIndexesAreSharedByMeaningNotArtifactIdentityOrOrder()
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var pattern = ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.cs") });
+            var first = new SourceSealWithPatterns(root, pattern, false,
+                new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, ".git") })));
+            var equivalent = new SourceSealWithPatterns(root, pattern, false,
+                new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, ".git") })));
+            var second = new SourceSealWithPatterns(root.Combine(pt, "nested"), ReadOnlyArray<StringId>.Empty, true);
+            var cache = new SourceSealDirectoryIndex.Cache();
+            var index = cache.GetOrAdd(pt, new[] { first, second });
+
+            System.Threading.Tasks.Parallel.For(0, 64, _ =>
+                Assert.Same(index, cache.GetOrAdd(pt, new[] { second, equivalent, first })));
+            Assert.NotSame(index, cache.GetOrAdd(pt, new[] { first }));
+            Assert.NotSame(index, cache.GetOrAdd(pt, new[] { new SourceSealWithPatterns(root, pattern, true, first.Exclusions), second }));
+            Assert.NotSame(index, cache.GetOrAdd(pt, new[] { new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false, first.Exclusions), second }));
+            Assert.NotSame(index, cache.GetOrAdd(pt, new[] { new SourceSealWithPatterns(root, pattern, false,
+                new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, ".jj") }))), second }));
+
+            var pipId = new global::BuildXL.Pips.PipId(1);
+            cache.Bind(pipId, index);
+            Assert.Same(index, cache.GetOrAdd(pt, ThrowIfEnumerated(), pipId));
+        }
+
+        [Fact]
+        public void DefaultPolicyHasValueEquality()
+        {
+            Assert.Equal(default(SourceSealWithPatterns), default(SourceSealWithPatterns));
+            Assert.Equal(0, default(SourceSealWithPatterns).GetHashCode());
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void LookupCachePreservesBoundariesPatternsAndProbeFlags(bool reverse)
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var nested = root.Combine(pt, "nested");
+            var index = new SourceSealDirectoryIndex(pt, new[] {
+                new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false,
+                    new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] {
+                        RelativePath.Create(pt.StringTable, ".git"),
+                        RelativePath.Create(pt.StringTable, ".git/state"),
+                        RelativePath.Create(pt.StringTable, "nested/private"),
+                    }))),
+                new SourceSealWithPatterns(nested,
+                    ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.cs") }), true),
+                new SourceSealWithPatterns(nested,
+                    ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.txt") }), false),
+            });
+            var paths = new[] {
+                "nested/file.cs", "nested/file.h", "nested/file.txt", "nested/private",
+                "nested/private/file.cs", "nested/deep/file.cs", "nested/deep/file.txt",
+                "nested/.git/config", ".git", ".git/state", ".git/config",
+                ".github", "public/file", "public/deep/file", "nested", "",
+            };
+            if (reverse)
+            {
+                System.Array.Reverse(paths);
+            }
+
+            var cache = default(SourceSealDirectoryIndex.LookupCache);
+            foreach (var relative in paths)
+            {
+                var path = relative.Length == 0 ? root : root.Combine(pt, RelativePath.Create(pt.StringTable, relative));
+                foreach (bool probe in new[] { false, true, false })
+                {
+                    Assert.Equal(index.Match(pt, path, probe), index.Match(pt, path, ref cache, probe));
+                }
+            }
+
+            var outside = AbsolutePath.Create(pt, X("/c/elsewhere/file.cs"));
+            Assert.Equal(SourceSealMatch.None, index.Match(pt, outside, ref cache));
+            Assert.Equal(SourceSealMatch.None, index.Match(pt, AbsolutePath.Invalid, ref cache));
+            Assert.True(cache.Hits > 0);
+            Assert.True(cache.Misses > 0);
+        }
+
+        [Fact]
+        public void LookupCacheAvoidsRepeatedDirectoryResolutionButChecksBoundaryLeaves()
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var index = new SourceSealDirectoryIndex(pt, new[] {
+                new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false,
+                    new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, ".git") }))),
+            });
+            var cache = default(SourceSealDirectoryIndex.LookupCache);
+            for (int i = 0; i < 100; i++)
+            {
+                Assert.Equal(SourceSealMatch.Included, index.Match(pt, root.Combine(pt, "file" + i), ref cache));
+            }
+
+            var excluded = root.Combine(pt, ".git");
+            Assert.Equal(SourceSealMatch.Excluded, index.Match(pt, excluded, ref cache));
+            Assert.Equal(SourceSealMatch.Included, index.Match(pt, excluded, ref cache, allowExactExcludedProbe: true));
+            Assert.Equal(SourceSealMatch.Excluded, index.Match(pt, excluded, ref cache));
+            Assert.Equal(102, cache.Hits);
+            Assert.Equal(1, cache.Misses);
+
+            Assert.Equal(SourceSealMatch.Excluded, index.Match(pt, excluded.Combine(pt, "config"), ref cache, allowExactExcludedProbe: true));
+            Assert.Equal(2, cache.Misses);
+        }
+
+        [Fact]
+        public void LookupCacheReusesBoundaryFreeSubtreesAndDoesNotLeakBetweenIndexes()
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var included = new SourceSealDirectoryIndex(pt, new[] { new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false) });
+            var excluded = new SourceSealDirectoryIndex(pt, new[] {
+                new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false,
+                    new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, "deep") }))),
+            });
+            System.Threading.Tasks.Parallel.For(0, 32, _ =>
+            {
+                var cache = default(SourceSealDirectoryIndex.LookupCache);
+                foreach (var relative in new[] { "file", "deep/file", "deep/child/file" })
+                {
+                    var path = root.Combine(pt, RelativePath.Create(pt.StringTable, relative));
+                    Assert.Equal(SourceSealMatch.Included, included.Match(pt, path, ref cache));
+                }
+
+                Assert.Equal(2, cache.Hits);
+                Assert.Equal(1, cache.Misses);
+                var child = root.Combine(pt, RelativePath.Create(pt.StringTable, "deep/child/file"));
+                Assert.Equal(SourceSealMatch.Excluded, excluded.Match(pt, child, ref cache));
+                Assert.Equal(SourceSealMatch.Included, included.Match(pt, child, ref cache));
+                Assert.Equal(3, cache.Misses);
+            });
+        }
+
+        private static System.Collections.Generic.IEnumerable<SourceSealWithPatterns> ThrowIfEnumerated()
+        {
+            Assert.Fail("A bound pip must reuse its validated index.");
+            yield break;
         }
 
         [Fact]

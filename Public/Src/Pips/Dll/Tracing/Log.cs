@@ -1155,6 +1155,25 @@ namespace BuildXL.Pips.Tracing
             string fallbackReason);
 
         [GeneratedEvent(
+            (int)LogEventId.ScheduleFailAddPipSourceSealRootUnderExclusion,
+            EventGenerators = EventGenerators.LocalOnly,
+            EventLevel = Level.Error,
+            Keywords = (int)(Keywords.UserMessage | Keywords.UserError),
+            EventTask = (int)Tasks.Scheduler,
+            Message = EventConstants.ProvenancePrefix +
+                "Source seal root '{sourceRoot}' is at or below excluded path '{excludedPath}' in this pip's directory dependencies. Source seals cannot re-include an excluded subtree.")]
+        public abstract void ScheduleFailAddPipSourceSealRootUnderExclusion(
+            LoggingContext context,
+            string file,
+            int line,
+            int column,
+            long pipSemiStableHash,
+            string pipDescription,
+            string pipValueId,
+            string sourceRoot,
+            string excludedPath);
+
+        [GeneratedEvent(
             (int)LogEventId.NoPipsMatchedFilter,
             EventGenerators = EventGenerators.LocalOnly,
             EventLevel = Level.Error,

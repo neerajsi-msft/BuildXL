@@ -682,6 +682,11 @@ namespace Test.BuildXL.Scheduler
 
             private class Environment : IObservedInputProcessingEnvironment
             {
+                private readonly SourceSealDirectoryIndex.Cache m_sourceSealDirectoryIndices = new SourceSealDirectoryIndex.Cache();
+
+                public SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals) =>
+                    m_sourceSealDirectoryIndices.GetOrAdd(Context.PathTable, seals, pipId);
+
                 private readonly Harness m_harness;
 
                 public CacheConfiguration Configuration { get; } = new CacheConfiguration();

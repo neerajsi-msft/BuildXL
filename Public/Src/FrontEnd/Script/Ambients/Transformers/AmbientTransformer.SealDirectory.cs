@@ -42,7 +42,6 @@ namespace BuildXL.FrontEnd.Script.Ambients.Transformers
         private SymbolAtom m_sealInclude;
         private SymbolAtom m_sealPatterns;
         private SymbolAtom m_sealExcludedPaths;
-        private SymbolAtom m_sealExcludedNames;
         private SymbolAtom m_sealScrub;
         private SymbolAtom m_sealOutputDirectories;
         private SymbolAtom m_sealDirectories;
@@ -59,7 +58,6 @@ namespace BuildXL.FrontEnd.Script.Ambients.Transformers
             m_sealInclude = Symbol("include");
             m_sealPatterns = Symbol("patterns");
             m_sealExcludedPaths = Symbol("excludedPaths");
-            m_sealExcludedNames = Symbol("excludedNames");
             m_sealScrub = Symbol("scrub");
             m_sealOutputDirectories = Symbol("outputDirectories");
             m_sealDirectories = Symbol("directories");
@@ -164,7 +162,6 @@ namespace BuildXL.FrontEnd.Script.Ambients.Transformers
                 description = Converter.ExtractString(obj, m_sealDescription, allowUndefined: true);
                 patterns = Converter.ExtractStringArray(obj, m_sealPatterns, allowUndefined: true);
                 var pathValues = Converter.ExtractArrayLiteral(obj, m_sealExcludedPaths, allowUndefined: true);
-                var nameValues = Converter.ExtractArrayLiteral(obj, m_sealExcludedNames, allowUndefined: true);
                 var excludedPaths = new RelativePath[pathValues?.Length ?? 0];
                 for (int i = 0; i < excludedPaths.Length; i++)
                 {
@@ -176,15 +173,8 @@ namespace BuildXL.FrontEnd.Script.Ambients.Transformers
                     }
                 }
 
-                var excludedNames = new PathAtom[nameValues?.Length ?? 0];
-                for (int i = 0; i < excludedNames.Length; i++)
-                {
-                    excludedNames[i] = Converter.ExpectPathAtom(nameValues[i],
-                        new ConversionContext(pos: i, objectCtx: nameValues));
-                }
-
                 exclusions = new SourceSealExclusions(
-                    ReadOnlyArray<RelativePath>.From(excludedPaths), ReadOnlyArray<PathAtom>.From(excludedNames));
+                    ReadOnlyArray<RelativePath>.From(excludedPaths));
             }
             else
             {

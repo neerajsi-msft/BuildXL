@@ -40,6 +40,9 @@ namespace BuildXL.Pips
     {
         internal const uint FormatMarker = 0x46505442;
 
+        /// <inheritdoc />
+        public SourceSealDirectoryIndex.Cache SourceSealDirectoryIndices { get; } = new SourceSealDirectoryIndex.Cache();
+
         /// <summary>
         /// Returns whether the stream at its current position contains the file-backed PipTable format.
         /// </summary>

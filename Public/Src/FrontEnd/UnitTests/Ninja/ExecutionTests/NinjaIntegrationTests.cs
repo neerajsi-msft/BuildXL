@@ -43,18 +43,21 @@ namespace Test.BuildXL.FrontEnd.Ninja
         }
 
         [TheoryIfSupported(requiresLinuxBasedOperatingSystem: true)]
-        [InlineData(false, false, false)]
-        [InlineData(false, true, false)]
-        [InlineData(true, false, false)]
-        [InlineData(true, true, false)]
-        [InlineData(true, false, true)]
-        [InlineData(true, true, true)]
-        public void SourceSealsEnforceExclusionsInBothResolverForms(bool grouped, bool excluded, bool projectLinking)
+        [InlineData(false, "input.txt", true, false)]
+        [InlineData(false, ".git/config", false, false)]
+        [InlineData(false, "nested/.git/config", true, false)]
+        [InlineData(true, "input.txt", true, false)]
+        [InlineData(true, ".git/config", false, false)]
+        [InlineData(true, "nested/.git/config", true, false)]
+        [InlineData(true, "input.txt", true, true)]
+        [InlineData(true, ".git/config", false, true)]
+        [InlineData(true, "nested/.git/config", true, true)]
+        public void SourceSealsEnforceExclusionsInBothResolverForms(bool grouped, string input, bool succeeds, bool projectLinking)
         {
             const string project = @"
                 root: d`source`,
                 environment: Map.empty<string, string>().add('PATH', '/usr/bin:/bin'),
-                sourceDirectories: [{ root: d`source`, excludedNames: [a`.git`] }],
+                sourceDirectories: [{ root: d`source`, excludedPaths: [r`.git`] }],
             ";
             var dependencies = projectLinking ? "dependencies: []," : "";
             var projectSettings = grouped ? $"projects: [{{ name: 'source', {dependencies} {project} }}]," : project;
@@ -76,16 +79,17 @@ config({{
 }});")
                 .AddSpec(Path.Combine(SourceRoot, "source", "build.ninja"),
                     "rule copy\n  command = mkdir -p ../out && cat " +
-                    (excluded ? ".git/config" : "input.txt") +
+                    input +
                     " > $out\nbuild ../out/result.txt: copy\ndefault ../out/result.txt\n")
                 .AddSpec(Path.Combine(SourceRoot, "source", "input.txt"), "allowed")
                 .AddSpec(Path.Combine(SourceRoot, "source", ".git", "config"), "excluded")
+                .AddSpec(Path.Combine(SourceRoot, "source", "nested", ".git", "config"), "allowed")
                 .PersistSpecsAndGetConfiguration();
             ((CommandLineConfiguration)config).Sandbox.UnsafeSandboxConfigurationMutable.TreatStatAsProbe = false;
 
             var result = RunEngineWithConfig(config);
-            Assert.Equal(!excluded, result.IsSuccess);
-            if (excluded)
+            Assert.Equal(succeeds, result.IsSuccess);
+            if (!succeeds)
             {
                 AssertVerboseEventLogged(global::BuildXL.Processes.Tracing.LogEventId.PipProcessDisallowedFileAccess, allowMore: true);
                 AssertVerboseEventLogged(global::BuildXL.Scheduler.Tracing.LogEventId.DependencyViolationMissingSourceDependency, allowMore: true);

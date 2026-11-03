@@ -1406,6 +1406,12 @@ namespace BuildXL.Scheduler
         /// <nodoc />
         [CounterType(CounterType.Stopwatch)]
         ReclassificationRulesDuration,
+
+        /// <summary>Source-policy directory resolutions avoided by the pass-local matched-node cache.</summary>
+        SourceSealLookupCacheHits,
+
+        /// <summary>Source-policy directory resolutions requiring an ancestor lookup.</summary>
+        SourceSealLookupCacheMisses,
     }
 
     /// <summary>

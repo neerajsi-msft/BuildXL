@@ -17,6 +17,9 @@ namespace BuildXL.Pips
     /// </summary>
     public interface IPipTable : IDisposable
     {
+        /// <summary>Shared, validated source policy indexes used during construction and execution.</summary>
+        SourceSealDirectoryIndex.Cache SourceSealDirectoryIndices { get; }
+
         /// <summary>
         /// Gets whether the table has been disposed.
         /// </summary>

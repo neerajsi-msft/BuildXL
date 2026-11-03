@@ -33,7 +33,10 @@ namespace BuildXL.Pips
         /// <summary>
         /// Envelope for serialization
         /// </summary>
-        public static readonly FileEnvelope FileEnvelope = new FileEnvelope(name: "PipTable", version: 2);
+        public static readonly FileEnvelope FileEnvelope = new FileEnvelope(name: "PipTable", version: 3);
+
+        /// <inheritdoc />
+        public SourceSealDirectoryIndex.Cache SourceSealDirectoryIndices { get; } = new SourceSealDirectoryIndex.Cache();
 
         private sealed class PageablePipStore : PageableStore
         {

@@ -124,10 +124,9 @@ namespace BuildXL.FrontEnd.Ninja
                 foreach (var source in project.SourceDirectories)
                 {
                     if (source == null || !source.Root.IsValid ||
-                        (source.ExcludedPaths != null && source.ExcludedPaths.Any(path => !path.IsValid || path.IsEmpty)) ||
-                        (source.ExcludedNames != null && source.ExcludedNames.Any(name => !name.IsValid)))
+                        (source.ExcludedPaths != null && source.ExcludedPaths.Any(path => !path.IsValid || path.IsEmpty)))
                     {
-                        return InvalidSettings("Each source directory needs a valid root and nonempty relative exclusions and entry names.");
+                        return InvalidSettings("Each source directory needs a valid root and nonempty relative exclusion paths.");
                     }
                 }
 
