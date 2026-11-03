@@ -38,7 +38,7 @@ namespace BuildXL.FrontEnd.DirectGraph
             while ((line = m_reader.ReadLine()) != null)
             {
                 m_line++;
-                if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#", StringComparison.Ordinal))
+                if (string.IsNullOrWhiteSpace(line) || line.AsSpan().TrimStart().StartsWith("#", StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -47,7 +47,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                 bool indented = char.IsWhiteSpace(line[0]);
                 if (!header)
                 {
-                    if (indented || tokens.Count != 2 || tokens[0].Value != "directgraph" || tokens[1].Value != "2" ||
+                    if (indented || tokens.Count != 2 || tokens[0].Span is not "directgraph" || tokens[1].Span is not "2" ||
                         tokens.Any(token => token.Quoted))
                     {
                         throw Error("Expected 'directgraph 2' header.");
@@ -62,15 +62,16 @@ namespace BuildXL.FrontEnd.DirectGraph
                     {
                         throw Error("Expected an operation field and its value.");
                     }
+                    string field = tokens[0].Value.ToString();
                     var values = new List<string>();
                     for (int index = 1; index < tokens.Count; index++)
                     {
                         var token = tokens[index];
-                        char valueKind = ValueKind(current.Kind, tokens[0].Value, index - 1);
-                        if (!token.Quoted && token.Value.StartsWith("@", StringComparison.Ordinal))
+                        char valueKind = ValueKind(current.Kind, field, index - 1);
+                        if (!token.Quoted && token.Span.StartsWith("@", StringComparison.Ordinal))
                         {
-                            if (tokens[0].Value is not ("input" or "orderOnly") ||
-                                !TryId(token.Value.Substring(1), out int id) || id >= m_sets.Count)
+                            if (field is not ("input" or "orderOnly") ||
+                                !TryId(token.Span.Slice(1), out int id) || id >= m_sets.Count)
                             {
                                 throw Error($"Unknown or misplaced dependency set '{token.Value}'.");
                             }
@@ -81,7 +82,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                             values.Add(ResolveValue(token, valueKind));
                         }
                     }
-                    current.Add(tokens[0].Value, values.ToArray());
+                    current.Add(field, values.ToArray());
                     continue;
                 }
 
@@ -94,24 +95,22 @@ namespace BuildXL.FrontEnd.DirectGraph
                 {
                     throw Error("Expected a record kind and name.");
                 }
-                string kind = tokens[0].Value;
-                string name = tokens[1].Value;
-                if (string.IsNullOrWhiteSpace(name) || tokens[1].Quoted || name[0] is '$' or '@')
+                if (tokens[1].Span.IsWhiteSpace() || tokens[1].Quoted || tokens[1].Span[0] is '$' or '@')
                 {
                     throw Error("Record names must be nonempty bare identifiers.");
                 }
-                if (kind is "path" or "string")
+                if (tokens[0].Span is "path" or "string")
                 {
-                    var table = kind == "path" ? m_paths : m_strings;
-                    if (!TryId(name, out int id) || id != table.Count || tokens.Count != 3 || !tokens[2].Quoted)
+                    var table = tokens[0].Span is "path" ? m_paths : m_strings;
+                    if (!TryId(tokens[1].Span, out int id) || id != table.Count || tokens.Count != 3 || !tokens[2].Quoted)
                     {
-                        throw Error($"A {kind} registration must use the next dense ID ({table.Count}) and one quoted literal.");
+                        throw Error($"A {tokens[0].Value} registration must use the next dense ID ({table.Count}) and one quoted literal.");
                     }
-                    table.Add(tokens[2].Value);
+                    table.Add(tokens[2].Value.ToString());
                 }
-                else if (kind == "set")
+                else if (tokens[0].Span is "set")
                 {
-                    if (!TryId(name, out int id) || id != m_sets.Count)
+                    if (!TryId(tokens[1].Span, out int id) || id != m_sets.Count)
                     {
                         throw Error($"A dependency set must use the next dense ID ({m_sets.Count}).");
                     }
@@ -119,11 +118,12 @@ namespace BuildXL.FrontEnd.DirectGraph
                 }
                 else
                 {
+                    string kind = tokens[0].Value.ToString();
                     if (tokens.Count != 2 || kind is not ("process" or "writeFile" or "copyFile" or "sealDirectory" or "composeSharedOpaque" or "export"))
                     {
                         throw Error($"Unknown or malformed operation '{kind}'.");
                     }
-                    current = new DirectGraphTextRecord(kind, name, $"{m_file}:{m_line}");
+                    current = new DirectGraphTextRecord(kind, tokens[1].Value.ToString(), $"{m_file}:{m_line}");
                 }
             }
             if (!header)
@@ -136,9 +136,9 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
         }
 
-        private static bool TryId(string value, out int id) =>
+        private static bool TryId(ReadOnlySpan<char> value, out int id) =>
             int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out id) &&
-            id.ToString(CultureInfo.InvariantCulture) == value;
+            (value.Length == 1 || value[0] != '0');
 
         private static char ValueKind(string operation, string field, int index) => field switch
         {
@@ -154,15 +154,15 @@ namespace BuildXL.FrontEnd.DirectGraph
         {
             if (kind == '\0')
             {
-                if (!token.Quoted && token.Value.StartsWith("$", StringComparison.Ordinal))
+                if (!token.Quoted && token.Span.StartsWith("$", StringComparison.Ordinal))
                 {
                     throw Error($"This field requires a literal, not an intern reference '{token.Value}'.");
                 }
-                return token.Value;
+                return token.Value.ToString();
             }
             var table = kind == 'p' ? m_paths : m_strings;
-            if (token.Quoted || !token.Value.StartsWith("$" + kind, StringComparison.Ordinal) ||
-                !TryId(token.Value.Substring(2), out int id) || id >= table.Count)
+            if (token.Quoted || token.Value.Length < 2 || token.Span[0] != '$' || token.Span[1] != kind ||
+                !TryId(token.Span.Slice(2), out int id) || id >= table.Count)
             {
                 throw Error($"Expected a registered {(kind == 'p' ? "path" : "string")} reference (${kind}ID), got '{token.Value}'.");
             }
@@ -181,15 +181,18 @@ namespace BuildXL.FrontEnd.DirectGraph
                     continue;
                 }
                 bool quoted = line[i] == '"';
-                var value = new StringBuilder();
+                int start = i;
+                ReadOnlyMemory<char> value;
                 if (quoted)
                 {
-                    i++;
+                    start = ++i;
+                    StringBuilder decoded = null;
                     while (i < line.Length && line[i] != '"')
                     {
                         char c = line[i++];
                         if (c == '\\')
                         {
+                            decoded ??= new StringBuilder().Append(line, start, i - start - 1);
                             if (i == line.Length)
                             {
                                 throw Error("Incomplete escape.");
@@ -214,12 +217,13 @@ namespace BuildXL.FrontEnd.DirectGraph
                         {
                             throw Error("NUL is not allowed.");
                         }
-                        value.Append(c);
+                        decoded?.Append(c);
                     }
                     if (i == line.Length || (i + 1 < line.Length && !char.IsWhiteSpace(line[i + 1])))
                     {
                         throw Error("Unterminated quoted value or missing token separator.");
                     }
+                    value = decoded == null ? line.AsMemory(start, i - start) : decoded.ToString().AsMemory();
                     i++;
                 }
                 else
@@ -230,10 +234,11 @@ namespace BuildXL.FrontEnd.DirectGraph
                         {
                             throw Error("Quote values containing quotes, escapes, or control characters.");
                         }
-                        value.Append(line[i++]);
+                        i++;
                     }
+                    value = line.AsMemory(start, i - start);
                 }
-                result.Add(new Token(value.ToString(), quoted));
+                result.Add(new Token(value, quoted));
             }
             return result;
         }
@@ -241,7 +246,7 @@ namespace BuildXL.FrontEnd.DirectGraph
         private char ReadUnicode(string line, ref int index)
         {
             if (index + 4 > line.Length ||
-                !ushort.TryParse(line.Substring(index, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out ushort code))
+                !ushort.TryParse(line.AsSpan(index, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out ushort code))
             {
                 throw Error("Expected four hexadecimal digits after '\\u'.");
             }
@@ -253,10 +258,11 @@ namespace BuildXL.FrontEnd.DirectGraph
 
         private readonly struct Token
         {
-            public string Value { get; }
+            public ReadOnlyMemory<char> Value { get; }
+            public ReadOnlySpan<char> Span => Value.Span;
             public bool Quoted { get; }
 
-            public Token(string value, bool quoted)
+            public Token(ReadOnlyMemory<char> value, bool quoted)
             {
                 Value = value;
                 Quoted = quoted;

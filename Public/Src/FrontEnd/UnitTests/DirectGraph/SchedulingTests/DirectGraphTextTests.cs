@@ -146,12 +146,35 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Theory]
+        [InlineData("\"\"", "")]
+        [InlineData("\"plain caf\u00e9\"", "plain caf\u00e9")]
+        [InlineData("\"prefix\\nmid\\u0061\\tend\"", "prefix\nmida\tend")]
+        [InlineData("\"\\\"quoted\\\"\\\\\"", "\"quoted\"\\")]
+        public void ReaderRetainsLiteralValuesAfterAdvancing(string literal, string expected)
+        {
+            using var reader = new StringReader($"directgraph 2\nstring 0 {literal}\nprocess first\n  argument $s0\n  option {literal}\nprocess second\n  argument $s0\n");
+            using var records = new DirectGraphTextReader(reader, "graph.dg").Read().GetEnumerator();
+            Assert.True(records.MoveNext());
+            var first = records.Current;
+            Assert.True(records.MoveNext());
+            Assert.Equal("first", first.Name);
+            Assert.Equal(expected, first.Fields["argument"][0][0]);
+            Assert.Equal(expected, first.Fields["option"][0][0]);
+            Assert.Equal(expected, records.Current.Fields["argument"][0][0]);
+            Assert.False(records.MoveNext());
+        }
+
+        [Theory]
         [InlineData("directgraph 1")]
         [InlineData("directgraph 2\nstring 0 \"x\"\nstring 0 \"y\"")]
         [InlineData("directgraph 2\npath 1 \"x\"")]
         [InlineData("directgraph 2\nstring 01 \"x\"")]
+        [InlineData("directgraph 2\nstring +0 \"x\"")]
+        [InlineData("directgraph 2\nstring -0 \"x\"")]
+        [InlineData("directgraph 2\nstring 2147483648 \"x\"")]
         [InlineData("directgraph 2\nset 1")]
         [InlineData("directgraph 2\nset 0 @0")]
+        [InlineData("directgraph 2\npath 0 \"x\"\nset 0 $p0\nprocess p\n  input @00")]
         [InlineData("directgraph 2\nwriteFile w\n  content $s0")]
         [InlineData("directgraph 2\nstring 0 \"x\"\nwriteFile w\n  destination $s0")]
         [InlineData("directgraph 2\npath 0 \"x\"\nwriteFile w\n  content $p0")]
@@ -159,6 +182,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         [InlineData("directgraph 2\nwriteFile w\n  destination \"x\"")]
         [InlineData("directgraph 2\npath 0 \"x\"\nset 0 \"x\"")]
         [InlineData("directgraph 2\npath 0 \"x\"\nwriteFile w\n  destination $p01")]
+        [InlineData("directgraph 2\npath 0 \"x\"\nwriteFile w\n  destination $p")]
         [InlineData("directgraph 2\nstring 0 \"bad\\q\"")]
         [InlineData("directgraph 2\nstring 0 \"bad\\u0000\"")]
         [InlineData("directgraph 2\nstring 0 \"x\"suffix")]
