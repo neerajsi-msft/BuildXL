@@ -198,7 +198,44 @@ namespace IntegrationTest.BuildXL.Scheduler
             }
         }
 
-        private DirectoryArtifact SealWithExclusions()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void NarrowedSourcePolicyCannotReplayPreviouslyCachedReads(bool useNestedPattern)
+        {
+            var source = CreateSourceFile(Path.Combine(SourceRoot, "nested", "file.h"));
+            var output = CreateOutputFileArtifact();
+            Process Construct(bool narrow)
+            {
+                var broad = narrow && !useNestedPattern
+                    ? SealWithExclusions("nested")
+                    : SealDirectory(SourceRootPath, SealDirectoryKind.SourceAllDirectories);
+                var builder = CreatePipBuilder(new[]
+                {
+                    Operation.ReadFile(source, doNotInfer: true),
+                    Operation.WriteFile(output),
+                });
+                builder.AddInputDirectory(broad);
+                if (useNestedPattern)
+                {
+                    builder.AddInputDirectory(PipGraphBuilder.AddSealDirectory(CreateSourceSealDirectory(
+                        source.Path.GetParent(Context.PathTable), SealDirectoryKind.SourceAllDirectories, narrow ? "*.cs" : "*")));
+                }
+                return SchedulePipBuilder(builder).Process;
+            }
+
+            var original = Construct(narrow: false);
+            RunScheduler().AssertCacheMiss(original.PipId);
+            RunScheduler().AssertCacheHit(original.PipId);
+            ResetPipGraphBuilder();
+            var reloaded = Construct(narrow: false);
+            RunScheduler().AssertCacheHit(reloaded.PipId);
+            ResetPipGraphBuilder();
+            Construct(narrow: true);
+            AssertExcludedAccessFails();
+        }
+
+        private DirectoryArtifact SealWithExclusions(string excludedRoot = ".git")
         {
             var seal = new SealDirectory(
                 SourceRootPath,
@@ -209,7 +246,7 @@ namespace IntegrationTest.BuildXL.Scheduler
                 sourceExclusions: new SourceSealExclusions(
                     ReadOnlyArray<RelativePath>.From(new[] {
                         RelativePath.Create(Context.StringTable, "private/state"),
-                        RelativePath.Create(Context.StringTable, ".git"),
+                        RelativePath.Create(Context.StringTable, excludedRoot),
                     })));
             return PipGraphBuilder.AddSealDirectory(seal);
         }
