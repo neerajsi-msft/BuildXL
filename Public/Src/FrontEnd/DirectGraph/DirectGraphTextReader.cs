@@ -143,10 +143,11 @@ namespace BuildXL.FrontEnd.DirectGraph
         private static char ValueKind(string operation, string field, int index) => field switch
         {
             "destination" or "source" or "executable" or "workingDirectory" or "input" or "orderOnly" or
-                "output" or "rewrite" or "file" or "directoryRoot" => 'p',
+                "output" or "rewrite" or "file" or "directoryRoot" or "tempDirectory" => 'p',
             "inputDirectory" or "outputDirectory" or "directory" => index == 0 ? 'p' : '\0',
             "content" => operation == "sealDirectory" ? 'p' : 's',
             "argument" or "environment" or "passthroughEnvironment" or "description" or "pattern" => 's',
+            "semaphore" => index == 0 ? 's' : '\0',
             _ => '\0',
         };
 

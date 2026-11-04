@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -377,6 +378,33 @@ namespace BuildXL.FrontEnd.DirectGraph
                 process.Arguments.Add(argumentRows.SelectMany(row => row).Select(m_values.String));
             }
             Description(fields, value => process.Description = value);
+            string temp = fields.One("tempDirectory");
+            if (temp != null)
+            {
+                process.TempDirectory = m_values.Path(Absolute(project, temp));
+            }
+            string automaticTemp = fields.One("enableTempDirectory");
+            if (automaticTemp != null)
+            {
+                process.EnableTempDirectory = automaticTemp switch
+                {
+                    "true" => true,
+                    "false" => false,
+                    _ => throw new InvalidDataException("enableTempDirectory expects true or false."),
+                };
+            }
+            var semaphoreNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var values in fields.Rows("semaphore"))
+            {
+                Arity(values, 3);
+                if (string.IsNullOrEmpty(values[0]) || !semaphoreNames.Add(values[0]) ||
+                    !int.TryParse(values[1], NumberStyles.None, CultureInfo.InvariantCulture, out int limit) || limit <= 0 ||
+                    !int.TryParse(values[2], NumberStyles.None, CultureInfo.InvariantCulture, out int increment) || increment <= 0 || increment > limit)
+                {
+                    throw new InvalidDataException("semaphore expects a unique nonempty name, positive limit and positive increment no greater than the limit.");
+                }
+                process.Semaphores.Add(new ProcessSemaphore { Name = m_values.String(values[0]), Limit = limit, IncrementBy = increment });
+            }
             var environment = new HashSet<string>(StringComparer.Ordinal);
             foreach (var values in fields.Rows("environment"))
             {

@@ -925,6 +925,60 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Contains("Duplicate seal content", error.Message);
         }
 
+        [Fact]
+        public async Task TempAndSemaphoreFieldsUseNativeConstruction()
+        {
+            var project = Project("p", """
+                directgraph 2
+                path 0 "tool"
+                path 1 "."
+                path 2 "out/one"
+                path 3 "out/two"
+                path 4 "scratch"
+                string 0 "mutex"
+                writeFile tool
+                  destination $p0
+                  content $s0
+                process one
+                  executable $p0
+                  workingDirectory $p1
+                  output $p2
+                  enableTempDirectory true
+                  semaphore $s0 1 1
+                process two
+                  executable $p0
+                  workingDirectory $p1
+                  output $p3
+                  tempDirectory $p4
+                  semaphore $s0 1 1
+                """);
+            await Load(new[] { project });
+            var processes = m_pipGraph.RetrieveScheduledPips().OfType<Process>().ToArray();
+            Assert.Equal(2, processes.Length);
+            Assert.True(processes[0].TempDirectory.IsValid);
+            Assert.Equal(Absolute("scratch"), processes[1].TempDirectory);
+            Assert.NotEqual(processes[0].TempDirectory, processes[1].TempDirectory);
+            Assert.All(processes, process =>
+            {
+                Assert.Contains(process.TempDirectory, process.UntrackedScopes);
+                Assert.Equal(1, Assert.Single(process.Semaphores).Limit);
+                Assert.Contains(process.EnvironmentVariables, entry => entry.Name.ToString(m_paths.StringTable) == "TMPDIR");
+            });
+        }
+
+        [Theory]
+        [InlineData("enableTempDirectory true\n  tempDirectory $p1")]
+        [InlineData("enableTempDirectory maybe")]
+        [InlineData("semaphore $s0 0 1")]
+        [InlineData("semaphore $s0 1 2")]
+        [InlineData("semaphore $s0 1 1\n  semaphore $s0 1 1")]
+        public async Task InvalidTempAndSemaphoreFieldsFailWithRecordContext(string fields)
+        {
+            var project = Project("p", "directgraph 2\npath 0 \"tool\"\npath 1 \".\"\npath 2 \"out\"\nstring 0 \"mutex\"\nwriteFile tool\n  destination $p0\n  content $s0\nprocess run\n  executable $p0\n  workingDirectory $p1\n  output $p2\n  " + fields);
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
+            Assert.Contains("p/run", error.Message);
+        }
+
         private DirectGraphProjectSettings Project(string name, string text, params string[] dependencies)
         {
             var file = Absolute(name + ".dg");

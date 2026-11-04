@@ -487,9 +487,15 @@ namespace BuildXL.Engine.DirectGraph
                 }
             }
 
+            var semaphoreNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var semaphore in request.Semaphores)
             {
                 string name = StringValue(RequiredString(semaphore.HasName, semaphore.Name, "semaphores.name"));
+                if (string.IsNullOrEmpty(name) || !semaphoreNames.Add(name) ||
+                    semaphore.Limit <= 0 || semaphore.IncrementBy <= 0 || semaphore.IncrementBy > semaphore.Limit)
+                {
+                    throw new InvalidRequestException("Semaphores require unique nonempty names and positive increments no greater than their positive limits.");
+                }
                 processBuilder.SetSemaphore(name, semaphore.Limit, semaphore.IncrementBy);
             }
 
@@ -973,7 +979,16 @@ namespace BuildXL.Engine.DirectGraph
                 processBuilder.SetTraceFile(ResolvePath(request.TraceFile, "trace_file"));
             }
 
-            if (request.HasTempDirectory)
+            if (request.EnableTempDirectory && request.HasTempDirectory)
+            {
+                throw new InvalidRequestException("enable_temp_directory and temp_directory are mutually exclusive.");
+            }
+
+            if (request.EnableTempDirectory)
+            {
+                processBuilder.EnableTempDirectory();
+            }
+            else if (request.HasTempDirectory)
             {
                 processBuilder.SetTempDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(ResolvePath(request.TempDirectory, "temp_directory")));
             }
