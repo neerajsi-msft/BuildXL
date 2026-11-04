@@ -59,6 +59,9 @@ unexported-generated-input error as loading the producer first. Configured file
 exports are reserved before loading any project. This symmetric active-graph
 check does not discover unselected fragments, scan filesystem membership or
 require source seals for ordinary explicit inputs.
+In particular, an explicit source cannot lie under **any project's shared or
+exclusive opaque root**, in either construction order. BoB's broad uniform
+private writable roots must therefore not contain source files.
 An ancestor witness index bounds source/output checks without scanning every
 source. Unlisted opaque file inputs likewise retain their selected producer
 grant so a later sibling's private explicit output cannot bypass the existing
