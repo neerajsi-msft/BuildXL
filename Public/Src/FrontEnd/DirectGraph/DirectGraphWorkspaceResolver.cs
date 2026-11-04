@@ -182,7 +182,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                     {
                         throw new InvalidDataException("Text projects cannot be combined with external tool settings.");
                     }
-                    DirectGraphTextLoader.OrderProjects(resolverSettings.Projects, resolverSettings.Roots, m_context.PathTable);
+                    DirectGraphProject.Create(resolverSettings.Projects, resolverSettings.Roots, m_context.PathTable);
                     moduleNames = resolverSettings.Projects.Select(project => project.Name.ToString(m_context.StringTable)).ToReadOnlySet();
                     return true;
                 }

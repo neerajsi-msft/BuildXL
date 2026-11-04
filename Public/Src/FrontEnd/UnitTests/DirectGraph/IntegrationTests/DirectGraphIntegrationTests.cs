@@ -410,6 +410,106 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.False(File.Exists(Path.Combine(TestRoot, "out", "second.txt")));
         }
 
+        [Theory]
+        [InlineData("exclusive")]
+        [InlineData("shared")]
+        [InlineData("composite")]
+        public void UnlistedOpaqueMembersExecuteThroughDirectoryDependencies(string directoryKind)
+        {
+            bool windows = OperatingSystemHelper.IsWindowsOS;
+            string executable = windows ? CmdHelper.CmdX64 : CmdHelper.Bash;
+            string[] flags = windows ? new[] { "/d", "/c" } : new[] { "-c" };
+            string registrations = string.Join("\n", flags.Select((flag, index) => $"string {index} {JsonSerializer.Serialize(flag)}"));
+            string arguments(int commandId) => string.Join("\n", flags.Select((_, index) => $"  argument $s{index}")) +
+                $"\n  argument $s{commandId}";
+            string first = windows
+                ? @"if not exist out\opaque mkdir out\opaque & echo first> out\opaque\a.txt"
+                : "mkdir -p out/opaque && printf first > out/opaque/a.txt";
+            string second = windows
+                ? @"if not exist out\opaque mkdir out\opaque & echo second> out\opaque\b.txt"
+                : "mkdir -p out/opaque && printf second > out/opaque/b.txt";
+            string read = windows ? @"type out\opaque\a.txt > out\result.txt" : "cat out/opaque/a.txt > out/result.txt";
+            string composition = directoryKind == "composite" ? $$"""
+                process second
+                  executable $p0
+                  workingDirectory $p1
+                {{arguments(flags.Length + 1)}}
+                  option dependsOnCurrentOs
+                  outputDirectory $p2 shared
+                composeSharedOpaque combined
+                  directoryRoot $p2
+                  directory $p2 first
+                  directory $p2 second
+                """ : "";
+
+            var config = Build()
+                .Configuration($$"""
+                    config({
+                        resolvers: [{
+                            kind: "DirectGraph", roots: ["consumer"],
+                            projects: [
+                                { name: a`tools`, root: d`.`, graphFiles: [f`tools.dg`],
+                                  directoryExports: [p`{{Path.GetDirectoryName(executable).Replace('\\', '/')}}`] },
+                                { name: a`producer`, root: d`.`, graphFiles: [f`producer.dg`], dependencies: ["tools"] },
+                                { name: a`consumer`, root: d`.`, graphFiles: [f`consumer.dg`], dependencies: ["producer", "tools"] },
+                            ],
+                        }],
+                        mounts: [{ name: a`out`, path: p`out`, trackSourceFileChanges: true, isReadable: true, isWritable: true }],
+                    });
+                    """)
+                .AddFile("tools.dg", $$"""
+                    directgraph 2
+                    path 0 {{JsonSerializer.Serialize(Path.GetDirectoryName(executable))}}
+                    sealDirectory host
+                      directoryRoot $p0
+                      sealKind sourceTopDirectoryOnly
+                    """)
+                .AddFile("producer.dg", $$"""
+                    directgraph 2
+                    path 0 {{JsonSerializer.Serialize(executable)}}
+                    path 1 "."
+                    path 2 "out/opaque"
+                    {{registrations}}
+                    string {{flags.Length}} {{JsonSerializer.Serialize(first)}}
+                    string {{flags.Length + 1}} {{JsonSerializer.Serialize(second)}}
+                    process first
+                      executable $p0
+                      workingDirectory $p1
+                    {{arguments(flags.Length)}}
+                      option dependsOnCurrentOs
+                      outputDirectory $p2 {{(directoryKind == "exclusive" ? "exclusive" : "shared")}}
+                    {{composition}}
+                    export public
+                      directory $p2 {{(directoryKind == "composite" ? "combined" : "first")}}
+                    """)
+                .AddFile("consumer.dg", $$"""
+                    directgraph 2
+                    path 0 {{JsonSerializer.Serialize(executable)}}
+                    path 1 "."
+                    path 2 "out/opaque/a.txt"
+                    path 3 "out/result.txt"
+                    {{registrations}}
+                    string {{flags.Length}} {{JsonSerializer.Serialize(read)}}
+                    process consume
+                      executable $p0
+                      workingDirectory $p1
+                    {{arguments(flags.Length)}}
+                      option dependsOnCurrentOs
+                      input $p2
+                      output $p3
+                    """)
+                .PersistSpecsAndGetConfiguration();
+            var mutable = (CommandLineConfiguration)config;
+            mutable.Engine.Phase = EnginePhases.Execute;
+            mutable.Sandbox.FileSystemMode = FileSystemMode.RealAndMinimalPipGraph;
+            mutable.DisableInBoxSdkSourceResolver = true;
+            using var tempFiles = new TempFileStorage(canGetFileNames: true, rootPath: TestOutputDirectory);
+            var result = CreateAndRunEngine(config, CreateAppDeployment(tempFiles), testRootDirectory: null,
+                rememberAllChangedTrackedInputs: true, engine: out _);
+            Assert.True(result.IsSuccess);
+            Assert.Equal("first", File.ReadAllText(Path.Combine(TestRoot, "out", "result.txt")).Trim());
+        }
+
         private string Resolver(string module, string graphFile) => $$"""
             {
                 kind: "DirectGraph",

@@ -19,6 +19,7 @@ namespace DirectGraph {
             Core.dll,
             Script.dll,
             Sdk.dll,
+            SdkProjectGraph.dll,
             Utilities.dll,
             TypeScript.Net.dll,
             ...importFrom("BuildXL.Cache.ContentStore").getGrpcPackages(true),

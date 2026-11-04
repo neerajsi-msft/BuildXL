@@ -132,6 +132,48 @@ namespace BuildXL.Engine.DirectGraph
         /// </remarks>
         public bool IsComplete => Volatile.Read(ref m_complete);
 
+        /// <summary>
+        /// Binds host-provided dependency artifacts in this stream without constructing replacement producers.
+        /// Import IDs belong to the host, not the fragment or the wire protocol.
+        /// </summary>
+        public void RegisterImportedArtifacts(
+            ulong importId, FileArtifact[] files, DirectoryArtifact[] directories, PipId producer = default)
+        {
+            Contract.Requires(importId != 0);
+            Contract.Requires(files != null && directories != null);
+            Contract.Requires(files.All(file => file.IsValid) && directories.All(directory => directory.IsValid));
+            Contract.Requires(!m_complete && m_firstRejection == null);
+            var sortedFiles = files.ToArray();
+            Array.Sort(sortedFiles, OrdinalPathOnlyFileArtifactComparer.Instance);
+            m_producedArtifacts.Add(importId, new ProducedArtifacts(sortedFiles, directories.ToArray(), producer));
+        }
+
+        /// <summary>Returns an actual file output, including its rewrite count and scheduling producer.</summary>
+        public FileArtifact GetProducedFile(ulong operationId, AbsolutePath path, out PipId producer)
+        {
+            var artifacts = Producer(operationId, "host file output");
+            producer = artifacts.PipId;
+            int index = Array.BinarySearch(artifacts.Files, FileArtifact.CreateSourceFile(path), OrdinalPathOnlyFileArtifactComparer.Instance);
+            if (index < 0)
+            {
+                throw new InvalidOperationException($"Operation {operationId} did not produce '{path.ToString(m_pathTable)}'.");
+            }
+            return artifacts.Files[index];
+        }
+
+        /// <summary>Returns an actual directory output, including its BuildXL-assigned seal identity.</summary>
+        public DirectoryArtifact GetProducedDirectory(ulong operationId, AbsolutePath path)
+        {
+            foreach (var directory in Producer(operationId, "host directory output").Directories)
+            {
+                if (directory.Path == path)
+                {
+                    return directory;
+                }
+            }
+            throw new InvalidOperationException($"Operation {operationId} did not produce directory '{path.ToString(m_pathTable)}'.");
+        }
+
         /// <inheritdoc />
         public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, CancellationToken cancellationToken)
             => HandleOperationAsync(operation, PipData.Invalid, cancellationToken);

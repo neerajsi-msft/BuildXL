@@ -9,16 +9,20 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using BuildXL.Engine.DirectGraph;
+using BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver;
 using BuildXL.Native.IO;
+using BuildXL.Pips;
 using BuildXL.Pips.Operations;
+using BuildXL.Utilities.Collections;
 using BuildXL.Utilities.Configuration;
 using BuildXL.Utilities.Core;
 using SealDirectoryKind = BuildXL.Engine.DirectGraph.SealDirectoryKind;
+using GraphSealDirectoryKind = BuildXL.Pips.Operations.SealDirectoryKind;
 
 namespace BuildXL.FrontEnd.DirectGraph
 {
     /// <summary>
-    /// Links dependency-first text fragments directly into the pip builder. Only artifact indexes and one operation
+    /// Expands one project's text fragments directly into its pip builder. Only artifact indexes and one operation
     /// are retained; neither a whole-graph object model nor a serialization/transport round trip is needed.
     /// </summary>
     public sealed class DirectGraphTextLoader
@@ -26,166 +30,138 @@ namespace BuildXL.FrontEnd.DirectGraph
         private static readonly StringComparer s_paths = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         private readonly PathTable m_pathTable;
         private readonly Func<GraphOperation, PipData, CancellationToken, Task<GraphOperationResponse>> m_send;
+        private readonly DirectGraphPipGraphBuilder m_builder;
+        private readonly SharedState m_state;
         private readonly DirectGraphValueRegistry m_values = new();
-        private readonly Dictionary<string, Project> m_projects = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, FileBinding> m_files = new(s_paths);
-        private readonly List<DirectoryBinding> m_directories = new();
-        private readonly List<DirectoryBinding> m_sourceDirectories = new();
-        private readonly HashSet<string> m_dynamicRoots = new(s_paths);
-        private readonly HashSet<string> m_configuredOutputs = new(s_paths);
+        private readonly List<Project> m_dependencies = new();
+        private readonly Dictionary<FileArtifact, ulong> m_importedFiles = new();
+        private readonly Dictionary<DirectoryArtifact, ulong> m_importedDirectories = new();
+        private readonly List<FileBinding> m_pendingFiles = new();
+        private readonly List<DirectoryBinding> m_pendingDirectories = new();
+        private Project m_project;
         private ulong m_nextId = 1;
+        private ulong m_nextImportId = ulong.MaxValue;
 
         /// <nodoc />
-        public DirectGraphTextLoader(PathTable pathTable, Func<GraphOperation, PipData, CancellationToken, Task<GraphOperationResponse>> send)
+        public DirectGraphTextLoader(
+            PathTable pathTable, DirectGraphPipGraphBuilder builder, SharedState state,
+            Func<GraphOperation, PipData, CancellationToken, Task<GraphOperationResponse>> send = null)
         {
             m_pathTable = pathTable;
-            m_send = send;
+            m_builder = builder;
+            m_state = state;
+            m_send = send ?? builder.HandleOperationAsync;
         }
 
-        /// <summary>Validates the entire DAG, then returns the selected closure in dependency order.</summary>
-        public static IReadOnlyList<IDirectGraphProjectSettings> OrderProjects(
-            IReadOnlyList<IDirectGraphProjectSettings> projects, IReadOnlyList<string> roots, PathTable pathTable)
+        /// <summary>
+        /// Resolver-wide ownership and policy metadata. Visibility comes exclusively from the shared linker's
+        /// dependency outputs, not from these indexes. This state requires serial project construction.
+        /// </summary>
+        public sealed class SharedState
         {
-            if (projects == null || projects.Count == 0)
+            internal readonly Dictionary<string, FileBinding> Files = new(s_paths);
+            internal readonly List<DirectoryBinding> Directories = new();
+            internal readonly List<DirectoryBinding> SourceDirectories = new();
+            internal readonly HashSet<string> DynamicRoots = new(s_paths);
+            internal readonly HashSet<string> ConfiguredOutputs = new(s_paths);
+            internal readonly Dictionary<FileArtifact, FileBinding> FileArtifacts = new();
+            internal readonly Dictionary<(string Project, AbsolutePath Path), DirectoryBinding> DirectoryExports = new();
+
+            /// <nodoc />
+            public SharedState(PathTable pathTable, IReadOnlyList<IDirectGraphProjectSettings> settings)
             {
-                throw new InvalidDataException("At least one text project is required.");
-            }
-            var byName = new Dictionary<string, IDirectGraphProjectSettings>(StringComparer.Ordinal);
-            var uniqueNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var project in projects)
-            {
-                if (project == null || !project.Name.IsValid || !project.Root.IsValid)
+                foreach (var project in settings)
                 {
-                    throw new InvalidDataException("Each text project requires a valid name and root.");
-                }
-                string name = project.Name.ToString(pathTable.StringTable);
-                if (!uniqueNames.Add(name))
-                {
-                    throw new InvalidDataException($"Duplicate project name '{name}' (names must also differ ignoring case).");
-                }
-                byName.Add(name, project);
-                if ((project.GraphFiles ?? Array.Empty<AbsolutePath>()).Concat(project.PolicyFiles ?? Array.Empty<AbsolutePath>()).Any(file => !file.IsValid) ||
-                    (project.FileExports ?? Array.Empty<AbsolutePath>()).Concat(project.DirectoryExports ?? Array.Empty<AbsolutePath>()).Any(path => !path.IsValid))
-                {
-                    throw new InvalidDataException($"Project '{name}' contains an invalid fragment or export path.");
+                    ConfiguredOutputs.UnionWith((project.FileExports ?? Array.Empty<AbsolutePath>()).Select(path => path.ToString(pathTable)));
                 }
             }
-            var states = new Dictionary<string, int>(StringComparer.Ordinal);
-            var ordered = new List<IDirectGraphProjectSettings>();
-            void visit(string name)
-            {
-                if (name == null || !byName.TryGetValue(name, out var project))
-                {
-                    throw new InvalidDataException($"Unknown project '{name}'.");
-                }
-                if (states.TryGetValue(name, out int state))
-                {
-                    if (state == 1)
-                    {
-                        throw new InvalidDataException($"Project dependency cycle at '{name}'.");
-                    }
-                    return;
-                }
-                states[name] = 1;
-                var dependencies = new HashSet<string>(StringComparer.Ordinal);
-                foreach (string dependency in project.Dependencies ?? Array.Empty<string>())
-                {
-                    if (dependency == null || !dependencies.Add(dependency))
-                    {
-                        throw new InvalidDataException($"Project '{name}' has an empty or repeated dependency.");
-                    }
-                    visit(dependency);
-                }
-                states[name] = 2;
-                ordered.Add(project);
-            }
-            foreach (string name in byName.Keys)
-            {
-                visit(name);
-            }
-            var selected = new HashSet<string>(StringComparer.Ordinal);
-            void select(string name)
-            {
-                if (name == null || !byName.TryGetValue(name, out var project))
-                {
-                    throw new InvalidDataException($"Unknown root project '{name}'.");
-                }
-                if (selected.Add(name))
-                {
-                    foreach (string dependency in project.Dependencies ?? Array.Empty<string>())
-                    {
-                        select(dependency);
-                    }
-                }
-            }
-            foreach (string name in roots ?? byName.Keys.ToArray())
-            {
-                select(name);
-            }
-            return ordered.Where(project => selected.Contains(project.Name.ToString(pathTable.StringTable))).ToArray();
         }
 
         /// <summary>
         /// The opener must register each fragment as a tracked front-end input. The source probe must track existence,
         /// not read content, for source order-only prerequisites.
         /// </summary>
-        public async Task LoadAsync(
-            IReadOnlyList<IDirectGraphProjectSettings> projects,
-            IReadOnlyList<string> roots,
+        public async Task<ProjectGraphOutputs> LoadProjectAsync(
+            IDirectGraphProjectSettings settings,
+            IReadOnlyDictionary<DirectGraphProject, ProjectGraphOutputs> dependencyOutputs,
             Func<AbsolutePath, TextReader> open,
             Func<AbsolutePath, bool> sourceExists,
             CancellationToken cancellationToken)
         {
-            var ordered = OrderProjects(projects, roots, m_pathTable);
-            foreach (var project in projects)
+            if (m_project != null)
             {
-                m_configuredOutputs.UnionWith((project.FileExports ?? Array.Empty<AbsolutePath>()).Select(path => path.ToString(m_pathTable)));
+                throw new InvalidOperationException("A text loader constructs only one project.");
             }
-            foreach (var settings in ordered)
+            m_project = new Project(settings, m_pathTable);
+            foreach (var dependency in dependencyOutputs)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var project = new Project(settings, m_pathTable);
-                m_projects.Add(project.Name, project);
-                foreach (var file in (settings.GraphFiles ?? Array.Empty<AbsolutePath>()).Concat(settings.PolicyFiles ?? Array.Empty<AbsolutePath>()))
+                var imported = new Project(dependency.Key.Settings, m_pathTable);
+                foreach (var file in dependency.Value.Files.Values)
                 {
-                    using var reader = open(file);
-                    foreach (var record in new DirectGraphTextReader(reader, file.ToString(m_pathTable)).Read())
+                    imported.ExportedFiles.Add(file.Path.ToString(m_pathTable), m_state.FileArtifacts[file]);
+                }
+                foreach (var directory in dependency.Value.Directories.Values)
+                {
+                    var binding = m_state.DirectoryExports[(dependency.Key.Name, directory.Path)];
+                    if (binding.Artifact != directory.Root)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        try
+                        throw new InvalidDataException($"Dependency '{dependency.Key.Name}' supplied a different directory artifact for '{directory.Path.ToString(m_pathTable)}'.");
+                    }
+                    imported.ExportedDirectories.Add(directory.Path.ToString(m_pathTable), binding);
+                }
+                m_dependencies.Add(imported);
+            }
+            var project = m_project;
+            foreach (var file in (settings.GraphFiles ?? Array.Empty<AbsolutePath>()).Concat(settings.PolicyFiles ?? Array.Empty<AbsolutePath>()))
+            {
+                using var reader = open(file);
+                foreach (var record in new DirectGraphTextReader(reader, file.ToString(m_pathTable)).Read())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if (record.Name.StartsWith("__directgraph_", StringComparison.Ordinal) || !project.Names.Add(record.Name))
                         {
-                            if (record.Name.StartsWith("__directgraph_", StringComparison.Ordinal) || !project.Names.Add(record.Name))
-                            {
-                                throw new InvalidDataException($"Duplicate or reserved operation name '{record.Name}'.");
-                            }
-                            if (project.ExportStarted && record.Kind != "export")
-                            {
-                                throw new InvalidDataException("Export records must follow all construction records in a project.");
-                            }
-                            var operation = CreateOperation(project, record, sourceExists, out var data);
-                            await EmitAsync(operation, cancellationToken, data);
+                            throw new InvalidDataException($"Duplicate or reserved operation name '{record.Name}'.");
                         }
-                        catch (InvalidDataException exception)
+                        if (project.ExportStarted && record.Kind != "export")
                         {
-                            throw new InvalidDataException($"{record.Location} ({project.Name}/{record.Name}): {exception.Message}", exception);
+                            throw new InvalidDataException("Export records must follow all construction records in a project.");
                         }
+                        var operation = CreateOperation(project, record, sourceExists, out var data);
+                        await EmitAsync(operation, cancellationToken, data);
+                    }
+                    catch (InvalidDataException exception)
+                    {
+                        throw new InvalidDataException($"{record.Location} ({project.Name}/{record.Name}): {exception.Message}", exception);
                     }
                 }
-                var export = new AddExportRequest { Module = project.Name };
-                foreach (var path in settings.FileExports ?? Array.Empty<AbsolutePath>())
-                {
-                    export.Files.Add(PublishFile(project, path.ToString(m_pathTable)));
-                }
-                foreach (var path in settings.DirectoryExports ?? Array.Empty<AbsolutePath>())
-                {
-                    export.Directories.Add(PublishDirectory(project, new[] { path.ToString(m_pathTable) }));
-                }
-                if (export.Files.Count + export.Directories.Count > 0)
-                {
-                    await EmitAsync(new GraphOperation { AddExport = export }, cancellationToken);
-                }
+            }
+            var export = new AddExportRequest { Module = project.Name };
+            foreach (var path in settings.FileExports ?? Array.Empty<AbsolutePath>())
+            {
+                export.Files.Add(PublishFile(project, path.ToString(m_pathTable)));
+            }
+            foreach (var path in settings.DirectoryExports ?? Array.Empty<AbsolutePath>())
+            {
+                export.Directories.Add(PublishDirectory(project, new[] { path.ToString(m_pathTable) }));
+            }
+            if (export.Files.Count + export.Directories.Count > 0)
+            {
+                await EmitAsync(new GraphOperation { AddExport = export }, cancellationToken);
             }
             await EmitAsync(new GraphOperation { Complete = new CompleteRequest() }, cancellationToken);
+            foreach (var directory in project.ExportedDirectories.Values)
+            {
+                m_state.DirectoryExports.Add((project.Name, directory.Artifact.Path), directory);
+            }
+            return new ProjectGraphOutputs(
+                project.ExportedFiles.Values.Select(file => file.Artifact),
+                project.ExportedDirectories.Values.Select(directory => new StaticDirectory(
+                    directory.Artifact, directory.Kind,
+                    SortedReadOnlyArray<FileArtifact, OrdinalPathOnlyFileArtifactComparer>.SortUnsafe(
+                        directory.Members.Values.Select(file => file.Artifact).ToArray(),
+                        OrdinalPathOnlyFileArtifactComparer.Instance))));
         }
 
         private GraphOperation CreateOperation(Project project, DirectGraphTextRecord record, Func<AbsolutePath, bool> sourceExists, out PipData data)
@@ -278,14 +254,22 @@ namespace BuildXL.FrontEnd.DirectGraph
                         {
                             throw new InvalidDataException("Source seals cannot contain generated artifacts.");
                         }
-                        if (m_files.Keys.Concat(m_configuredOutputs).Any(path => Within(path, root)) ||
-                            m_directories.Any(directory => directory.Dynamic && Overlaps(directory.Path, root)))
+                        if (m_state.Files.Keys.Concat(m_state.ConfiguredOutputs).Any(path => Within(path, root)) ||
+                            m_state.Directories.Any(directory => directory.Dynamic && Overlaps(directory.Path, root)))
                         {
                             throw new InvalidDataException($"Source seal '{root}' overlaps generated outputs.");
                         }
                     }
                     AddDirectory(project, new DirectoryBinding(project, record.Name, root, id, false, sourceSeal,
-                        seal.Kind == SealDirectoryKind.SourceTopDirectoryOnly, fields.TakenPatterns, members));
+                        seal.Kind == SealDirectoryKind.SourceTopDirectoryOnly, fields.TakenPatterns, members,
+                        kind: seal.Kind switch
+                        {
+                            SealDirectoryKind.Partial => GraphSealDirectoryKind.Partial,
+                            SealDirectoryKind.Full => GraphSealDirectoryKind.Full,
+                            SealDirectoryKind.SourceAllDirectories => GraphSealDirectoryKind.SourceAllDirectories,
+                            SealDirectoryKind.SourceTopDirectoryOnly => GraphSealDirectoryKind.SourceTopDirectoryOnly,
+                            _ => throw new InvalidDataException($"Unknown seal kind '{seal.Kind}'."),
+                        }));
                     operation.AddSealDirectory = seal;
                     break;
                 case "composeSharedOpaque":
@@ -302,7 +286,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                             string action => throw new InvalidDataException($"Unknown composition action '{action}'."),
                         },
                     };
-                    var composedProducers = new HashSet<ulong>();
+                    var composedProducers = new HashSet<(Project Owner, ulong Id)>();
                     foreach (var values in fields.Rows("directory"))
                     {
                         var directory = ResolveDirectory(project, values);
@@ -420,7 +404,11 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
             foreach (string path in fields.Values("input"))
             {
-                process.InputFiles.Add(ResolveFile(project, Absolute(project, path), process));
+                var reference = ResolveFile(project, Absolute(project, path), process, allowDirectoryOnly: true);
+                if (reference != null)
+                {
+                    process.InputFiles.Add(reference);
+                }
             }
             foreach (string path in fields.Values("orderOnly"))
             {
@@ -466,19 +454,21 @@ namespace BuildXL.FrontEnd.DirectGraph
                     "exclusive" => OutputDirectoryKind.Exclusive,
                     string value => throw new InvalidDataException($"Unknown output directory kind '{value}'."),
                 };
-                AddDirectory(project, new DirectoryBinding(project, name, absolute, m_nextId, true));
+                AddDirectory(project, new DirectoryBinding(project, name, absolute, m_nextId, true,
+                    kind: kind == OutputDirectoryKind.Shared ? GraphSealDirectoryKind.SharedOpaque : GraphSealDirectoryKind.Opaque));
                 process.OutputDirectories.Add(new OutputDirectory { Path = m_values.Path(absolute), Kind = kind });
             }
             return process;
         }
 
-        private FileArtifactReference ResolveFile(Project project, string path, AddProcessRequest process)
+        /// <summary>Returns null for an unlisted ordinary input whose dependency is supplied by an opaque directory.</summary>
+        private FileArtifactReference ResolveFile(Project project, string path, AddProcessRequest process, bool allowDirectoryOnly = false)
         {
             if (project.Files.TryGetValue(path, out var local))
             {
                 return FileReference(local);
             }
-            var files = Dependencies(project).Where(dependency => dependency.ExportedFiles.ContainsKey(path))
+            var files = m_dependencies.Where(dependency => dependency.ExportedFiles.ContainsKey(path))
                 .Select(dependency => dependency.ExportedFiles[path]).Distinct().ToArray();
             if (files.Length > 1)
             {
@@ -504,7 +494,8 @@ namespace BuildXL.FrontEnd.DirectGraph
             {
                 if (process != null && dynamic.Length > 1)
                 {
-                    dynamic = dynamic.Where(directory => process.InputDirectories.Any(reference => reference.ProducerOperationId == directory.Id &&
+                    dynamic = dynamic.Where(directory => process.InputDirectories.Any(reference =>
+                        reference.ProducerOperationId == DirectoryReference(directory).ProducerOperationId &&
                         reference.Path == m_values.Path(directory.Path))).ToArray();
                 }
                 if (dynamic.Length != 1 || process == null)
@@ -512,17 +503,21 @@ namespace BuildXL.FrontEnd.DirectGraph
                     throw new InvalidDataException($"Dynamic member '{path}' needs one unambiguous directory and a process consumer; use an explicit inputDirectory for overlapping roots.");
                 }
                 AddInputDirectory(process, dynamic[0]);
-                if (m_files.TryGetValue(path, out var generated))
+                if (m_state.Files.TryGetValue(path, out var generated))
                 {
-                    if (!dynamic[0].ProducerIds.Contains(generated.Id))
+                    if (!dynamic[0].ProducerIds.Contains((generated.Owner, generated.Id)))
                     {
                         throw new InvalidDataException($"Opaque export does not expose private explicit file '{path}'.");
                     }
                     return FileReference(generated);
                 }
-                return new FileArtifactReference { SourcePath = m_values.Path(path) };
+                if (!allowDirectoryOnly)
+                {
+                    throw new InvalidDataException($"Unlisted opaque member '{path}' requires a declared output where a concrete file artifact is needed.");
+                }
+                return null;
             }
-            if (m_files.ContainsKey(path) || m_configuredOutputs.Contains(path) || Ancestors(path).Any(m_dynamicRoots.Contains))
+            if (m_state.Files.ContainsKey(path) || m_state.ConfiguredOutputs.Contains(path) || Ancestors(path).Any(m_state.DynamicRoots.Contains))
             {
                 throw new InvalidDataException($"Generated input '{path}' is not exported by a declared dependency.");
             }
@@ -549,7 +544,7 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
             string path = Absolute(project, values[0]);
             var directories = (project.Directories.TryGetValue(path, out var local) ? local : Enumerable.Empty<DirectoryBinding>())
-                .Concat(Dependencies(project).Where(dependency => dependency.ExportedDirectories.ContainsKey(path))
+                .Concat(m_dependencies.Where(dependency => dependency.ExportedDirectories.ContainsKey(path))
                     .Select(dependency => dependency.ExportedDirectories[path])).Distinct();
             if (values.Length == 2)
             {
@@ -587,22 +582,23 @@ namespace BuildXL.FrontEnd.DirectGraph
 
         private void ClaimFile(Project project, string path, ulong id, bool rewrite = false)
         {
-            if (m_sourceDirectories.Any(directory => Within(path, directory.Path)))
+            if (m_state.SourceDirectories.Any(directory => Within(path, directory.Path)))
             {
                 throw new InvalidDataException($"Generated output '{path}' overlaps a source seal.");
             }
-            if (m_files.TryGetValue(path, out var previous) && (!rewrite || previous.Owner != project))
+            if (m_state.Files.TryGetValue(path, out var previous) && (!rewrite || previous.Owner != project))
             {
                 throw new InvalidDataException($"Duplicate file ownership at '{path}'.");
             }
             var binding = new FileBinding(project, path, id);
-            m_files[path] = binding;
+            m_state.Files[path] = binding;
             project.Files[path] = binding;
+            m_pendingFiles.Add(binding);
         }
 
         private void AddDirectory(Project project, DirectoryBinding directory)
         {
-            if (directory.Dynamic && m_sourceDirectories.Any(source => Overlaps(source.Path, directory.Path)))
+            if (directory.Dynamic && m_state.SourceDirectories.Any(source => Overlaps(source.Path, directory.Path)))
             {
                 throw new InvalidDataException($"Generated directory '{directory.Path}' overlaps a source seal.");
             }
@@ -611,39 +607,61 @@ namespace BuildXL.FrontEnd.DirectGraph
                 project.Directories.Add(directory.Path, directories = new List<DirectoryBinding>());
             }
             directories.Add(directory);
-            m_directories.Add(directory);
+            m_state.Directories.Add(directory);
+            m_pendingDirectories.Add(directory);
             if (directory.Source)
             {
-                m_sourceDirectories.Add(directory);
+                m_state.SourceDirectories.Add(directory);
             }
             if (directory.Dynamic)
             {
-                m_dynamicRoots.Add(directory.Path);
+                m_state.DynamicRoots.Add(directory.Path);
             }
         }
 
         private FileBinding Binding(Project project, string path, FileArtifactReference reference) =>
             reference.ReferenceCase == FileArtifactReference.ReferenceOneofCase.ProducedFile
-                ? new FileBinding(m_files[path].Owner, path, reference.ProducedFile.ProducerOperationId) : new FileBinding(project, path, 0);
+                ? m_state.FileArtifacts[m_builder.GetProducedFile(
+                    reference.ProducedFile.ProducerOperationId, AbsolutePath.Create(m_pathTable, path), out _)]
+                : new FileBinding(project, path, 0) { Artifact = FileArtifact.CreateSourceFile(AbsolutePath.Create(m_pathTable, path)) };
 
-        private FileArtifactReference FileReference(FileBinding binding) => binding.Id == 0
-            ? new FileArtifactReference { SourcePath = m_values.Path(binding.Path) }
-            : new FileArtifactReference { ProducedFile = new ProducedFileReference { ProducerOperationId = binding.Id, Path = m_values.Path(binding.Path) } };
+        private FileArtifactReference FileReference(FileBinding binding)
+        {
+            if (binding.Id == 0)
+            {
+                return new FileArtifactReference { SourcePath = m_values.Path(binding.Path) };
+            }
+            ulong id = binding.Id;
+            if (binding.Owner != m_project && !m_importedFiles.TryGetValue(binding.Artifact, out id))
+            {
+                id = m_nextImportId--;
+                m_builder.RegisterImportedArtifacts(id, new[] { binding.Artifact }, Array.Empty<DirectoryArtifact>(), binding.Producer);
+                m_importedFiles.Add(binding.Artifact, id);
+            }
+            return new FileArtifactReference { ProducedFile = new ProducedFileReference { ProducerOperationId = id, Path = m_values.Path(binding.Path) } };
+        }
 
-        private DirectoryArtifactReference DirectoryReference(DirectoryBinding binding) =>
-            new() { ProducerOperationId = binding.Id, Path = m_values.Path(binding.Path) };
+        private DirectoryArtifactReference DirectoryReference(DirectoryBinding binding)
+        {
+            ulong id = binding.Id;
+            if (binding.Owner != m_project && !m_importedDirectories.TryGetValue(binding.Artifact, out id))
+            {
+                id = m_nextImportId--;
+                m_builder.RegisterImportedArtifacts(id, Array.Empty<FileArtifact>(), new[] { binding.Artifact });
+                m_importedDirectories.Add(binding.Artifact, id);
+            }
+            return new DirectoryArtifactReference { ProducerOperationId = id, Path = m_values.Path(binding.Path) };
+        }
 
         private void AddInputDirectory(AddProcessRequest process, DirectoryBinding directory)
         {
             uint path = m_values.Path(directory.Path);
-            if (!process.InputDirectories.Any(reference => reference.ProducerOperationId == directory.Id && reference.Path == path))
+            var reference = DirectoryReference(directory);
+            if (!process.InputDirectories.Any(input => input.ProducerOperationId == reference.ProducerOperationId && input.Path == path))
             {
-                process.InputDirectories.Add(DirectoryReference(directory));
+                process.InputDirectories.Add(reference);
             }
         }
-
-        private IEnumerable<Project> Dependencies(Project project) =>
-            (project.Settings.Dependencies ?? Array.Empty<string>()).Select(name => m_projects[name]);
 
         private IEnumerable<DirectoryBinding> VisibleDirectories(Project project, string path)
         {
@@ -656,7 +674,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                         yield return directory;
                     }
                 }
-                foreach (var dependency in Dependencies(project))
+                foreach (var dependency in m_dependencies)
                 {
                     if (dependency.ExportedDirectories.TryGetValue(ancestor, out var directory))
                     {
@@ -708,6 +726,18 @@ namespace BuildXL.FrontEnd.DirectGraph
             {
                 throw new InvalidDataException($"Operation {operation.OperationId} rejected: {response.Error}");
             }
+            foreach (var file in m_pendingFiles)
+            {
+                file.Artifact = m_builder.GetProducedFile(file.Id, AbsolutePath.Create(m_pathTable, file.Path), out var producer);
+                file.Producer = producer;
+                m_state.FileArtifacts.Add(file.Artifact, file);
+            }
+            foreach (var directory in m_pendingDirectories)
+            {
+                directory.Artifact = m_builder.GetProducedDirectory(directory.Id, AbsolutePath.Create(m_pathTable, directory.Path));
+            }
+            m_pendingFiles.Clear();
+            m_pendingDirectories.Clear();
         }
 
         private static void Arity(string[] values, int count)
@@ -764,9 +794,8 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
         }
 
-        private sealed class Project
+        internal sealed class Project
         {
-            public IDirectGraphProjectSettings Settings { get; }
             public string Name { get; }
             public string Root { get; }
             public HashSet<string> Names { get; } = new(StringComparer.Ordinal);
@@ -777,15 +806,18 @@ namespace BuildXL.FrontEnd.DirectGraph
             public bool ExportStarted { get; set; }
             public Project(IDirectGraphProjectSettings settings, PathTable pathTable)
             {
-                Settings = settings;
                 Name = settings.Name.ToString(pathTable.StringTable);
                 Root = settings.Root.ToString(pathTable);
             }
         }
 
-        private sealed record FileBinding(Project Owner, string Path, ulong Id);
+        internal sealed record FileBinding(Project Owner, string Path, ulong Id)
+        {
+            public FileArtifact Artifact { get; set; }
+            public PipId Producer { get; set; }
+        }
 
-        private sealed class DirectoryBinding
+        internal sealed class DirectoryBinding
         {
             public Project Owner { get; }
             public string Symbol { get; }
@@ -793,13 +825,15 @@ namespace BuildXL.FrontEnd.DirectGraph
             public ulong Id { get; }
             public bool Dynamic { get; }
             public bool Source { get; }
-            public HashSet<ulong> ProducerIds { get; }
+            public HashSet<(Project Owner, ulong Id)> ProducerIds { get; }
+            public DirectoryArtifact Artifact { get; set; }
+            public GraphSealDirectoryKind Kind { get; }
             private readonly bool m_topOnly;
             private readonly string[] m_patterns;
             public Dictionary<string, FileBinding> Members { get; }
             public DirectoryBinding(Project owner, string symbol, string path, ulong id, bool dynamic,
                 bool source = false, bool topOnly = false, string[] patterns = null, Dictionary<string, FileBinding> members = null,
-                HashSet<ulong> producers = null)
+                HashSet<(Project Owner, ulong Id)> producers = null, GraphSealDirectoryKind? kind = null)
             {
                 Owner = owner;
                 Symbol = symbol;
@@ -807,7 +841,8 @@ namespace BuildXL.FrontEnd.DirectGraph
                 Id = id;
                 Dynamic = dynamic;
                 Source = source;
-                ProducerIds = producers ?? new HashSet<ulong> { id };
+                ProducerIds = producers ?? new HashSet<(Project Owner, ulong Id)> { (owner, id) };
+                Kind = kind ?? (dynamic ? GraphSealDirectoryKind.SharedOpaque : GraphSealDirectoryKind.Partial);
                 m_topOnly = topOnly;
                 m_patterns = patterns ?? Array.Empty<string>();
                 Members = members ?? new Dictionary<string, FileBinding>(s_paths);

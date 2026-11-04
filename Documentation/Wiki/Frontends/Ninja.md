@@ -367,8 +367,12 @@ final linked pip graph.
 
 Only direct dependencies' explicit exports are visible. Re-exports preserve the
 original producer. Static-directory members retain their actual file producers;
-dynamic-directory members acquire the corresponding directory input. Ambiguous
-directory roots require a producer qualifier (`operation` locally or
+dynamic-directory members acquire the corresponding directory input. Unlisted
+ordinary members add no source-file dependency or existence assertion, matching
+Ninja's directory-level consumption; runtime reads determine which members are
+used. Explicitly declared members retain their actual file artifacts. Executables
+still require a concrete file artifact and cannot use an unlisted opaque member.
+Ambiguous directory roots require a producer qualifier (`operation` locally or
 `project/operation` for dependencies). An opaque export does not expose unrelated
 private explicit files. The existing DScript `files` and `directories` maps expose
 each project's interface only after successful graph construction.
@@ -417,7 +421,13 @@ Order-only produced-file references establish scheduling edges without read
 authorization or content fingerprint dependencies. Source order-only references
 are existence-probed through the frontend engine. Every loaded graph/policy file
 is registered as a tracked frontend input. Pip caching and sandbox observations
-remain enabled. Projects share one builder; independently cached fragments and
+remain enabled. `ProjectGraphToGraphConstructor` coordinates the selected project
+closure through `IProjectToGraphConstructor`. Each project has its own serial
+DirectGraph loader and builder stream; completed dependencies supply actual
+exported file and directory artifacts, preserving rewrite counts, seal identities,
+and order-only producer edges. Resolver-wide ownership and source-policy indexes
+remain coordinated separately and do not grant visibility. Project construction
+is still serial; parallel scheduling, independently cached fragments, and
 per-project graph patching are not provided.
 
 The experimental Kati BuildXL backend emits this DirectGraph fragment format

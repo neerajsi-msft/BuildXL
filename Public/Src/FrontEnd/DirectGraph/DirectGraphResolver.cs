@@ -22,6 +22,7 @@ using BuildXL.FrontEnd.Script.Ambients.Map;
 using BuildXL.FrontEnd.Script.Evaluator;
 using BuildXL.FrontEnd.Script.Values;
 using BuildXL.FrontEnd.Utilities;
+using BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver;
 using BuildXL.FrontEnd.Workspaces.Core;
 using BuildXL.Pips.Graph;
 using BuildXL.Pips.Operations;
@@ -354,16 +355,16 @@ namespace BuildXL.FrontEnd.DirectGraph
                 traceOperation: m_resolverSettings.EnableProjectGraphVerboseLogging ?? false,
                 counters: m_counters);
 
-        private async Task<bool> ConstructTextGraphAsync()
+        private Task<bool> ConstructTextGraphAsync()
         {
             RegisterModulesTheHostLeftOut();
-            var builder = CreateGraphBuilder();
-            var loader = new DirectGraphTextLoader(m_context.PathTable, builder.HandleOperationAsync);
             try
             {
-                await loader.LoadAsync(
+                var projects = DirectGraphProject.Create(m_resolverSettings.Projects, m_resolverSettings.Roots, m_context.PathTable);
+                var constructor = new DirectGraphProjectGraphConstructor(
+                    m_context.PathTable,
                     m_resolverSettings.Projects,
-                    m_resolverSettings.Roots,
+                    state => new DirectGraphTextLoader(m_context.PathTable, CreateGraphBuilder(), state),
                     path =>
                     {
                         m_host.Engine.RecordFrontEndFile(path, Name);
@@ -372,12 +373,18 @@ namespace BuildXL.FrontEnd.DirectGraph
                     },
                     path => m_host.Engine.FileExists(path),
                     m_context.CancellationToken);
-                return builder.IsComplete;
+                var result = new ProjectGraphToGraphConstructor<DirectGraphProject>(constructor).TrySchedule(
+                    projects, m_context.QualifierTable.EmptyQualifierId);
+                if (!result.Succeeded)
+                {
+                    Tracing.Logger.Log.TextGraphError(m_context.LoggingContext, result.Failure.Describe());
+                }
+                return Task.FromResult(result.Succeeded);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 Tracing.Logger.Log.TextGraphError(m_context.LoggingContext, exception.Message);
-                return false;
+                return Task.FromResult(false);
             }
         }
 

@@ -106,8 +106,11 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 Root = m_root,
                 GraphFiles = new[] { m_root.Combine(m_context.PathTable, "graph.dg") },
             };
-            var loader = new DirectGraphTextLoader(m_context.PathTable, m_graphBuilder.HandleOperationAsync);
-            loader.LoadAsync(new[] { project }, null, _ => new StringReader(text), _ => true, CancellationToken.None).GetAwaiter().GetResult();
+            var loader = new DirectGraphTextLoader(m_context.PathTable, m_graphBuilder,
+                new DirectGraphTextLoader.SharedState(m_context.PathTable, new[] { project }));
+            loader.LoadProjectAsync(project,
+                new Dictionary<DirectGraphProject, global::BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver.ProjectGraphOutputs>(),
+                _ => new StringReader(text), _ => true, CancellationToken.None).GetAwaiter().GetResult();
 
             var actual = ProcessOf("composed").Arguments;
             var expected = PipDataBuilder.CreatePipData(m_context.StringTable, " ", PipDataFragmentEscaping.CRuntimeArgumentRules,

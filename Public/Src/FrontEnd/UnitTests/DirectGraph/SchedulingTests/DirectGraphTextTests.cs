@@ -9,11 +9,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using BuildXL.Engine.DirectGraph;
 using BuildXL.FrontEnd.DirectGraph;
+using BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver;
+using BuildXL.Pips;
+using BuildXL.Pips.Builders;
 using BuildXL.Pips.Operations;
 using BuildXL.Utilities.Configuration;
 using BuildXL.Utilities.Configuration.Mutable;
 using BuildXL.Utilities.Core;
+using BuildXL.Utilities.Instrumentation.Common;
 using GraphRenderer;
+using Test.BuildXL.TestUtilities;
 using Xunit;
 
 namespace Test.BuildXL.FrontEnd.DirectGraph
@@ -46,7 +51,12 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
               content $p0 $p2
             """;
 
-        private readonly PathTable m_paths = new();
+        private readonly BuildXLContext m_context = BuildXLContext.CreateInstanceForTesting();
+        private PathTable m_paths => m_context.PathTable;
+        private readonly TestEnv.TestPipGraph m_pipGraph = new();
+        private readonly Dictionary<(string Module, string Symbol), PipConstructionHelper> m_helpers = new();
+        private readonly Dictionary<string, DirectGraphPipGraphBuilder> m_builders = new();
+        private IReadOnlyDictionary<DirectGraphProject, ProjectGraphOutputs> m_outputs;
         private readonly string m_root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "directgraph-text-tests"));
         private readonly Dictionary<AbsolutePath, string> m_text = new();
         private readonly List<GraphOperation> m_operations = new();
@@ -322,7 +332,9 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             await Load(new[] { consumer, ignored, producer }, new[] { "consumer" });
             Assert.Equal(2, m_opened.Count);
             var copy = Assert.Single(m_operations.Where(operation => operation.AddCopyFile != null)).AddCopyFile;
-            Assert.Equal(1UL, copy.Source.ProducedFile.ProducerOperationId);
+            Assert.Equal(
+                m_outputs.Single(pair => pair.Key.Name == "producer").Value.Files[Absolute("out/a")],
+                m_builders["consumer"].GetProducedFile(copy.Source.ProducedFile.ProducerOperationId, Absolute("out/a"), out _));
             Assert.NotNull(m_operations.Last().Complete);
         }
 
@@ -349,6 +361,134 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 """, dependency ? new[] { "producer" } : Array.Empty<string>());
             var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { producer, consumer }));
             Assert.Contains("not exported", error.Message);
+        }
+
+        [Fact]
+        public async Task ProjectLocalStreamsImportActualRewritesAndOrderDependencies()
+        {
+            var producer = Project("producer", """
+                directgraph 2
+                path 0 "out/a"
+                path 1 "tools/tool"
+                path 2 "."
+                string 0 "data"
+                writeFile first
+                  destination $p0
+                  content $s0
+                writeFile tool
+                  destination $p1
+                  content $s0
+                process rewrite
+                  executable $p1
+                  workingDirectory $p2
+                  rewrite $p0
+                """);
+            producer.FileExports = new[] { Absolute("out/a"), Absolute("tools/tool") };
+            var consumer = Project("consumer", """
+                directgraph 2
+                path 0 "tools/tool"
+                path 1 "."
+                path 2 "out/a"
+                path 3 "out/result"
+                process consume
+                  executable $p0
+                  workingDirectory $p1
+                  input $p2
+                  orderOnly $p2
+                  output $p3
+                """, "producer");
+            await Load(new[] { consumer, producer });
+            var processes = m_pipGraph.RetrieveScheduledPips().OfType<Process>().ToArray();
+            var rewritten = Assert.Single(processes[0].FileOutputs).ToFileArtifact();
+            Assert.Equal(2, rewritten.RewriteCount);
+            Assert.Contains(rewritten, processes[1].Dependencies);
+            Assert.Contains(processes[0].PipId, processes[1].OrderDependencies);
+            Assert.NotSame(m_builders["producer"], m_builders["consumer"]);
+            Assert.True(m_builders.Values.All(builder => builder.IsComplete));
+            Assert.Equal(m_operations.First(operation => operation.AddWriteFile != null).OperationId,
+                m_operations.Single(operation => operation.AddProcess?.Symbol == "consume").OperationId);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task TransitiveFilesRequireAnExplicitReexport(bool reexport)
+        {
+            var producer = Project("producer", """
+                directgraph 2
+                path 0 "out/a"
+                string 0 "data"
+                writeFile first
+                  destination $p0
+                  content $s0
+                """);
+            producer.FileExports = new[] { Absolute("out/a") };
+            var forwarding = Project("forwarding", "directgraph 2", "producer");
+            if (reexport)
+            {
+                forwarding.FileExports = producer.FileExports;
+            }
+            var consumer = Project("consumer", """
+                directgraph 2
+                path 0 "out/a"
+                path 1 "out/b"
+                copyFile copy
+                  source $p0
+                  destination $p1
+                """, "forwarding");
+            if (!reexport)
+            {
+                var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { consumer, forwarding, producer }));
+                Assert.Contains("not exported", error.Message);
+                return;
+            }
+            await Load(new[] { consumer, forwarding, producer });
+            Assert.Equal(
+                m_outputs.Single(pair => pair.Key.Name == "forwarding").Value.Files[Absolute("out/a")],
+                Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<CopyFile>()).Source);
+        }
+
+        [Fact]
+        public async Task DirectoryReexportsPreserveSealIdentityMembershipAndProducerNames()
+        {
+            var producer = Project("producer", """
+                directgraph 2
+                path 0 "out/include/a.h"
+                path 1 "out/include"
+                string 0 "header"
+                writeFile write
+                  destination $p0
+                  content $s0
+                sealDirectory headers
+                  directoryRoot $p1
+                  content $p0
+                export public
+                  directory $p1
+                """);
+            var forwarding = Project("forwarding", "directgraph 2", "producer");
+            forwarding.DirectoryExports = new[] { Absolute("out/include") };
+            var consumer = Project("consumer", """
+                directgraph 2
+                path 0 "out/include"
+                path 1 "out/include/a.h"
+                path 2 "out/b.h"
+                sealDirectory selected
+                  directoryRoot $p0
+                  sealKind full
+                  content $p1
+                  outputDirectory $p0 "producer/headers"
+                copyFile copy
+                  source $p1
+                  destination $p2
+                """, "forwarding");
+            await Load(new[] { consumer, forwarding, producer });
+            var original = m_outputs.Single(pair => pair.Key.Name == "producer").Value.Directories[Absolute("out/include")];
+            var forwarded = m_outputs.Single(pair => pair.Key.Name == "forwarding").Value.Directories[Absolute("out/include")];
+            Assert.Equal(original.Root, forwarded.Root);
+            Assert.Equal(original.Contents.ToArray(), forwarded.Contents.ToArray());
+            var seals = m_pipGraph.RetrieveScheduledPips().OfType<SealDirectory>().ToArray();
+            Assert.Contains(original.Root, seals[1].OutputDirectoryContents);
+            Assert.Equal(original.Contents[0], Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<CopyFile>()).Source);
         }
 
         [Fact]
@@ -382,7 +522,9 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 """, "producer");
             await Load(new[] { consumer, producer });
             var copy = Assert.Single(m_operations.Where(operation => operation.AddCopyFile != null)).AddCopyFile;
-            Assert.Equal(1UL, copy.Source.ProducedFile.ProducerOperationId);
+            Assert.Equal(
+                m_outputs.Single(pair => pair.Key.Name == "producer").Value.Directories[Absolute("out/include")].Contents[0],
+                m_builders["consumer"].GetProducedFile(copy.Source.ProducedFile.ProducerOperationId, Absolute("out/include/a.h"), out _));
             Assert.Equal(3UL, m_operations.Single(operation => operation.AddExport != null).OperationId);
         }
 
@@ -542,6 +684,74 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             await Load(new[] { project });
             var consumer = m_operations.Single(operation => operation.AddProcess?.Symbol == "consume").AddProcess;
             Assert.Equal(2UL, Assert.Single(consumer.InputDirectories).ProducerOperationId);
+            Assert.Empty(consumer.InputFiles);
+        }
+
+        [Fact]
+        public async Task KnownOpaqueMembersKeepTheirProducedFileArtifacts()
+        {
+            var producer = Project("producer", """
+                directgraph 2
+                path 0 "tools/tool"
+                path 1 "."
+                path 2 "out/opaque"
+                path 3 "out/opaque/member"
+                string 0 "tool"
+                writeFile tool
+                  destination $p0
+                  content $s0
+                process generate
+                  executable $p0
+                  workingDirectory $p1
+                  output $p3
+                  outputDirectory $p2
+                """);
+            producer.FileExports = new[] { Absolute("tools/tool") };
+            producer.DirectoryExports = new[] { Absolute("out/opaque") };
+            var consumer = Project("consumer", """
+                directgraph 2
+                path 0 "tools/tool"
+                path 1 "."
+                path 2 "out/opaque/member"
+                path 3 "out/result"
+                process consume
+                  executable $p0
+                  workingDirectory $p1
+                  input $p2
+                  output $p3
+                """, "producer");
+            await Load(new[] { consumer, producer });
+            var request = m_operations.Single(operation => operation.AddProcess?.Symbol == "consume").AddProcess;
+            var reference = Assert.Single(request.InputFiles);
+            Assert.Equal(FileArtifactReference.ReferenceOneofCase.ProducedFile, reference.ReferenceCase);
+            var processes = m_pipGraph.RetrieveScheduledPips().OfType<Process>().ToArray();
+            Assert.Contains(Assert.Single(processes[0].FileOutputs).ToFileArtifact(), processes[1].Dependencies);
+            Assert.Single(request.InputDirectories);
+        }
+
+        [Fact]
+        public async Task UnlistedOpaqueExecutablesRequireConcreteArtifacts()
+        {
+            var project = Project("p", """
+                directgraph 2
+                path 0 "tools/tool"
+                path 1 "."
+                path 2 "out/opaque"
+                path 3 "out/opaque/executable"
+                string 0 "tool"
+                writeFile tool
+                  destination $p0
+                  content $s0
+                process generate
+                  executable $p0
+                  workingDirectory $p1
+                  outputDirectory $p2
+                process consume
+                  executable $p3
+                  workingDirectory $p1
+                """);
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
+            Assert.Contains("concrete file artifact", error.Message);
         }
 
         [Fact]
@@ -601,19 +811,64 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                   content $s1
                 """);
             int sent = 0;
-            var loader = new DirectGraphTextLoader(m_paths, (operation, data, token) =>
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }, reject: operation =>
             {
                 sent++;
-                return Task.FromResult(new GraphOperationResponse
+                return new GraphOperationResponse
                 {
                     Status = GraphOperationResponseStatus.GraphError,
                     Error = "pip validation rejected",
-                });
-            });
-            var error = await Assert.ThrowsAsync<InvalidDataException>(() => loader.LoadAsync(new[] { project }, null,
-                file => new StringReader(m_text[file]), _ => true, CancellationToken.None));
+                };
+            }));
             Assert.Contains("pip validation rejected", error.Message);
             Assert.Equal(1, sent);
+        }
+
+        [Fact]
+        public async Task OpaqueExportsDoNotExposeOtherProjectsPrivateFilesWithMatchingLocalIds()
+        {
+            var unrelated = Project("unrelated", """
+                directgraph 2
+                path 0 "out/other"
+                path 1 "out/opaque/private"
+                string 0 "private"
+                writeFile first
+                  destination $p0
+                  content $s0
+                writeFile private
+                  destination $p1
+                  content $s0
+                """);
+            var producer = Project("producer", """
+                directgraph 2
+                path 0 "tools/tool"
+                path 1 "."
+                path 2 "out/opaque"
+                string 0 "tool"
+                writeFile tool
+                  destination $p0
+                  content $s0
+                process opaque
+                  executable $p0
+                  workingDirectory $p1
+                  outputDirectory $p2
+                """, "unrelated");
+            producer.FileExports = new[] { Absolute("tools/tool") };
+            producer.DirectoryExports = new[] { Absolute("out/opaque") };
+            var consumer = Project("consumer", """
+                directgraph 2
+                path 0 "tools/tool"
+                path 1 "."
+                path 2 "out/opaque/private"
+                path 3 "out/result"
+                process consume
+                  executable $p0
+                  workingDirectory $p1
+                  input $p2
+                  output $p3
+                """, "producer");
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { consumer, producer, unrelated }));
+            Assert.Contains("private explicit file", error.Message);
         }
 
         [Fact]
@@ -655,17 +910,54 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
 
         private AbsolutePath Absolute(string value) => AbsolutePath.Create(m_paths, Path.GetFullPath(value, m_root));
 
-        private Task Load(IReadOnlyList<IDirectGraphProjectSettings> projects, string[] roots = null, Func<AbsolutePath, bool> probe = null)
+        private Task Load(
+            IReadOnlyList<IDirectGraphProjectSettings> projects, string[] roots = null, Func<AbsolutePath, bool> probe = null,
+            Func<GraphOperation, GraphOperationResponse> reject = null)
         {
-            var loader = new DirectGraphTextLoader(m_paths, (operation, data, token) =>
-            {
-                m_operations.Add(operation);
-                m_data.Add(data);
-                return Task.FromResult(new GraphOperationResponse { Status = GraphOperationResponseStatus.Success });
-            });
-            return loader.LoadAsync(projects, roots,
+            var selected = DirectGraphProject.Create(projects, roots, m_paths);
+            var constructor = new DirectGraphProjectGraphConstructor(m_paths, projects, state =>
+                {
+                    var builder = new DirectGraphPipGraphBuilder(
+                        m_paths, m_pipGraph, new SandboxConfiguration(),
+                        () => ProcessBuilder.CreateForTesting(m_paths, new NoOpCredentialScanner(), new LoggingContext("Test")),
+                        TryGetHelper,
+                        (string module, FileOrDirectoryArtifact artifact, out string error) => { error = null; return true; },
+                        new LoggingContext("Test"), traceOperation: false);
+                    return new DirectGraphTextLoader(m_paths, builder, state, (operation, data, token) =>
+                    {
+                        string module = operation.AddProcess?.Module ?? operation.AddWriteFile?.Module ?? operation.AddCopyFile?.Module ??
+                            operation.AddSealDirectory?.Module ?? operation.AddCompositeSharedOpaqueDirectory?.Module ?? operation.AddExport?.Module;
+                        if (module != null)
+                        {
+                            m_builders[module] = builder;
+                        }
+                        m_operations.Add(operation);
+                        m_data.Add(data);
+                        return reject == null ? builder.HandleOperationAsync(operation, data, token) : Task.FromResult(reject(operation));
+                    });
+                },
                 file => { m_opened.Add(file); return new StringReader(m_text[file]); },
                 probe ?? (_ => true), CancellationToken.None);
+            var result = new ProjectGraphToGraphConstructor<DirectGraphProject>(constructor).TrySchedule(selected, m_context.QualifierTable.EmptyQualifierId);
+            if (!result.Succeeded)
+            {
+                return Task.FromException(new InvalidDataException(result.Failure.Describe()));
+            }
+            m_outputs = result.Result;
+            return Task.CompletedTask;
+        }
+
+        private bool TryGetHelper(string module, string symbol, out PipConstructionHelper helper, out string error)
+        {
+            if (!m_helpers.TryGetValue((module, symbol), out helper))
+            {
+                helper = PipConstructionHelper.CreateForTesting(
+                    m_context, objectRoot: Absolute("."), redirectedRoot: Absolute("redirected"), pipGraph: m_pipGraph,
+                    moduleName: module, symbol: symbol, specPath: Absolute(module + ".dsc"));
+                m_helpers.Add((module, symbol), helper);
+            }
+            error = null;
+            return true;
         }
     }
 }
