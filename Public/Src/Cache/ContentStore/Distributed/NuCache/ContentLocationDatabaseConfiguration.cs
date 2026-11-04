@@ -82,6 +82,12 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         public AbsolutePath StoreLocation { get; }
 
         /// <summary>
+        /// Delay after startup or a completed memtable flush before the next flush. Nonpositive values disable periodic flushing.
+        /// Disabled by default for distributed databases; local memoization cache factories opt in.
+        /// </summary>
+        public TimeSpan FlushInterval { get; set; } = TimeSpan.Zero;
+
+        /// <summary>
         /// Testing purposes only. Used to set location to load initial database data from.
         /// NOTE: This disables <see cref="CleanOnInitialize"/>
         /// </summary>

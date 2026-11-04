@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.ContractsLight;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +16,7 @@ using BuildXL.Cache.ContentStore.InterfacesTest.Time;
 using BuildXL.Cache.ContentStore.Tracing.Internal;
 using BuildXL.Cache.ContentStore.UtilitiesCore;
 using BuildXL.Cache.ContentStore.Utils;
+using BuildXL.Cache.MemoizationStore.Interfaces.Sessions;
 using BuildXL.Utilities;
 using BuildXL.Utilities.Core;
 using BuildXL.Utilities.Tracing;
@@ -52,6 +54,108 @@ namespace ContentStoreTest.Distributed.ContentLocation.NuCache
 
             // MergeEntry is the counter used for both merging sorted and un-softed entries.
             c[ContentLocationDatabaseCounters.MergeEntry].Value.Should().Be(expectedCount);
+        }
+
+        [Fact]
+        public async Task PeriodicFlushPersistsMetadataWithoutShutdown()
+        {
+            var path = _workingDirectory.Path / "writer";
+            var configuration = new RocksDbContentLocationDatabaseConfiguration(path)
+            {
+                CleanOnInitialize = false,
+                TraceOperations = false,
+                FlushInterval = TimeSpan.FromMilliseconds(100),
+            };
+            var context = new OperationContext(new Context(Logger));
+            var db = new RocksDbContentLocationDatabase(Clock, configuration, () => Array.Empty<MachineId>());
+            await db.StartupAsync(context).ShouldBeSuccess();
+            try
+            {
+                await db.SetDatabaseModeAsync(isDatabaseWriteable: true);
+                var fingerprint = StrongFingerprint.Random();
+                var metadata = new ContentHashListWithDeterminism(
+                    new ContentHashList(new[] { ContentHash.Random() }), CacheDeterminism.None);
+                db.TryUpsert(context, fingerprint, metadata, _ => true, lastAccessTimeUtc: null).Result.Should().BeTrue();
+                db.SetGlobalEntry("key", "value");
+                var hash = ContentHash.Random().ToShortHash();
+                db.LocationAdded(context, hash, new MachineId(1), size: 42).Should().BeTrue();
+
+                // Require a flush that started after all writes, even if an earlier timer tick raced the writes.
+                var previousFlushes = db.Counters[ContentLocationDatabaseCounters.Flush].Value;
+                var timeout = Stopwatch.StartNew();
+                while (db.Counters[ContentLocationDatabaseCounters.Flush].Value <= previousFlushes + 1)
+                {
+                    Assert.True(timeout.Elapsed < TimeSpan.FromSeconds(30), "Periodic flush did not complete.");
+                    await Task.Delay(20);
+                }
+
+                var copyPath = _workingDirectory.Path / "copy";
+                // No checkpoint and no clean shutdown: reopen only files already persisted by the timer.
+                Directory.CreateDirectory(copyPath.Path);
+                foreach (var directory in Directory.GetDirectories(path.Path, "*", SearchOption.AllDirectories))
+                {
+                    Directory.CreateDirectory(Path.Combine(copyPath.Path, directory.Substring(path.Path.Length + 1)));
+                }
+
+                foreach (var file in Directory.GetFiles(path.Path, "*", SearchOption.AllDirectories))
+                {
+                    File.Copy(file, Path.Combine(copyPath.Path, file.Substring(path.Path.Length + 1)));
+                }
+
+                var copyConfiguration = new RocksDbContentLocationDatabaseConfiguration(copyPath)
+                {
+                    CleanOnInitialize = false,
+                    OpenReadOnly = true,
+                    TraceOperations = false,
+                };
+                var reopened = new RocksDbContentLocationDatabase(Clock, copyConfiguration, () => Array.Empty<MachineId>());
+                await reopened.StartupAsync(context).ShouldBeSuccess();
+                try
+                {
+                    reopened.GetMetadataEntry(context, fingerprint, touch: false).Value.Value.ContentHashListWithDeterminism.Should().Be(metadata);
+                    reopened.TryGetGlobalEntry("key", out var value).Should().BeTrue();
+                    value.Should().Be("value");
+                    reopened.TryGetEntry(context, hash, out var entry).Should().BeTrue();
+                    entry.ContentSize.Should().Be(42);
+                }
+                finally
+                {
+                    await reopened.ShutdownAsync(context).ShouldBeSuccess();
+                }
+            }
+            finally
+            {
+                await db.ShutdownAsync(context).ShouldBeSuccess();
+            }
+
+            var completedFlushes = db.Counters[ContentLocationDatabaseCounters.Flush].Value;
+            await Task.Delay(200);
+            db.Counters[ContentLocationDatabaseCounters.Flush].Value.Should().Be(completedFlushes);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        public async Task NonpositiveIntervalDisablesPeriodicFlush(int seconds)
+        {
+            var configuration = new RocksDbContentLocationDatabaseConfiguration(_workingDirectory.Path)
+            {
+                FlushInterval = TimeSpan.FromSeconds(seconds),
+                TraceOperations = false,
+            };
+            var context = new OperationContext(new Context(Logger));
+            var db = new RocksDbContentLocationDatabase(Clock, configuration, () => Array.Empty<MachineId>());
+            await db.StartupAsync(context).ShouldBeSuccess();
+            try
+            {
+                db.SetGlobalEntry("key", "value");
+                await Task.Delay(200);
+                db.Counters[ContentLocationDatabaseCounters.Flush].Value.Should().Be(0);
+            }
+            finally
+            {
+                await db.ShutdownAsync(context).ShouldBeSuccess();
+            }
         }
 
         [Theory]
@@ -387,10 +491,13 @@ namespace ContentStoreTest.Distributed.ContentLocation.NuCache
             }
 
             configuration.OpenReadOnly = true;
+            configuration.FlushInterval = TimeSpan.FromMilliseconds(10);
             {
                 var db = new RocksDbContentLocationDatabase(Clock, configuration, () => new MachineId[] { });
                 await db.StartupAsync(ctx).ShouldBeSuccess();
 
+                await Task.Delay(100);
+                db.Counters[ContentLocationDatabaseCounters.Flush].Value.Should().Be(0);
                 db.TryGetGlobalEntry("test", out var readValue);
                 readValue.Should().Be("hello");
 

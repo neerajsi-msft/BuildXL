@@ -176,5 +176,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// <nodoc />
         [CounterType(CounterType.Stopwatch)]
         MergeMultipleLocations,
+
+        /// <summary>
+        /// Number and duration of periodic memtable flushes.
+        /// </summary>
+        [CounterType(CounterType.Stopwatch)]
+        Flush,
     }
 }

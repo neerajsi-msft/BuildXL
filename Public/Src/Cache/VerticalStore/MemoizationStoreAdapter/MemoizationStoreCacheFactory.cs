@@ -129,6 +129,14 @@ namespace BuildXL.Cache.MemoizationStoreAdapter
             [DefaultValue(60 * 60)]
             public int RocksDbMemoizationStoreGarbageCollectionIntervalInSeconds { get; set; }
 
+            /// <summary>
+            /// Interval in seconds between flushing local RocksDB memoization metadata to disk.
+            /// Defaults to ten minutes. Zero or negative values disable periodic flushing.
+            /// Does not enable the write-ahead log; writes since the last flush can still be lost on abrupt termination.
+            /// </summary>
+            [DefaultValue(600)]
+            public int RocksDbMemoizationStoreFlushIntervalInSeconds { get; set; } = 600;
+
             /// <nodoc />
             [DefaultValue(null)]
             public GrpcEnvironmentOptions GrpcEnvironmentOptions { get; set; }
@@ -359,6 +367,7 @@ namespace BuildXL.Cache.MemoizationStoreAdapter
                 {
                     CleanOnInitialize = false,
                     GarbageCollectionInterval = TimeSpan.FromSeconds(config.RocksDbMemoizationStoreGarbageCollectionIntervalInSeconds),
+                    FlushInterval = TimeSpan.FromSeconds(config.RocksDbMemoizationStoreFlushIntervalInSeconds),
                     MetadataGarbageCollectionMaximumSizeMb = config.MaxCacheSizeInMB,
                     OnFailureDeleteExistingStoreAndRetry = true
                 },
