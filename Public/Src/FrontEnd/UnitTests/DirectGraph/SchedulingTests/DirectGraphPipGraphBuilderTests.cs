@@ -125,6 +125,23 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Fact]
+        public void NameOnlyPassthroughDoesNotCaptureAWireValueOrFallback()
+        {
+            var request = NewProcess("passthrough", "out.txt");
+            request.EnvironmentVariables.Add(new EnvironmentVariableEntry
+            {
+                Name = Text("DG_PASSTHROUGH"),
+                Value = Text("must-not-be-a-fallback"),
+                IsPassThrough = true,
+            });
+            Assert.Equal(GraphOperationResponseStatus.Success, Send(new GraphOperation { OperationId = 1, AddProcess = request }).Status);
+            var entry = Assert.Single(ProcessOf("passthrough").EnvironmentVariables.Where(
+                variable => variable.Name.ToString(m_context.StringTable) == "DG_PASSTHROUGH"));
+            Assert.True(entry.IsPassThrough);
+            Assert.False(entry.Value.IsValid);
+        }
+
+        [Fact]
         public void StructuredArgumentsCannotSilentlyOverrideWireArguments()
         {
             var request = NewProcess("ambiguous", "out.txt");

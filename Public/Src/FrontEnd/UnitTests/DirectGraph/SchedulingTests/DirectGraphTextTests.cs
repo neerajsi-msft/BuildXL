@@ -940,6 +940,8 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 path 2 "out/one"
                 path 3 "out/two"
                 path 4 "scratch"
+                path 5 "out/three"
+                path 6 "out/four"
                 string 0 "mutex"
                 writeFile tool
                   destination $p0
@@ -956,14 +958,27 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                   output $p3
                   tempDirectory $p4
                   semaphore $s0 1 1
+                process three
+                  executable $p0
+                  workingDirectory $p1
+                  output $p5
+                  enableTempDirectory true
+                  semaphore $s0 1 1
+                process four
+                  executable $p0
+                  workingDirectory $p1
+                  output $p6
                 """);
             await Load(new[] { project });
             var processes = m_pipGraph.RetrieveScheduledPips().OfType<Process>().ToArray();
-            Assert.Equal(2, processes.Length);
+            Assert.Equal(4, processes.Length);
             Assert.True(processes[0].TempDirectory.IsValid);
             Assert.Equal(Absolute("scratch"), processes[1].TempDirectory);
             Assert.NotEqual(processes[0].TempDirectory, processes[1].TempDirectory);
-            Assert.All(processes, process =>
+            Assert.True(processes[2].TempDirectory.IsValid);
+            Assert.NotEqual(processes[0].TempDirectory, processes[2].TempDirectory);
+            Assert.False(processes[3].TempDirectory.IsValid);
+            Assert.All(processes.Take(3), process =>
             {
                 Assert.Contains(process.TempDirectory, process.UntrackedScopes);
                 Assert.Equal(1, Assert.Single(process.Semaphores).Limit);
