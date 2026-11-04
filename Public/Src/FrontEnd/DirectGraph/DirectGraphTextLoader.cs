@@ -40,7 +40,11 @@ namespace BuildXL.FrontEnd.DirectGraph
         private readonly List<FileBinding> m_pendingFiles = new();
         private readonly List<DirectoryBinding> m_pendingDirectories = new();
         private Project m_project;
+        private DirectGraphTextRecord m_record;
         private string m_sourceConsumer;
+        private string SourceConsumer => m_sourceConsumer ??= m_record != null
+            ? $"{m_record.Location} ({m_project.Name}/{m_record.Name})"
+            : $"Project '{m_project.Name}' configured exports";
         private ulong m_nextId = 1;
         private ulong m_nextImportId = ulong.MaxValue;
 
@@ -137,7 +141,8 @@ namespace BuildXL.FrontEnd.DirectGraph
                         {
                             throw new InvalidDataException("Export records must follow all construction records in a project.");
                         }
-                        m_sourceConsumer = $"{record.Location} ({project.Name}/{record.Name})";
+                        m_record = record;
+                        m_sourceConsumer = null;
                         var operation = CreateOperation(project, record, sourceExists, out var data);
                         if (operation != null)
                         {
@@ -150,24 +155,33 @@ namespace BuildXL.FrontEnd.DirectGraph
                     }
                 }
             }
+            m_record = null;
+            m_sourceConsumer = null;
             var export = new AddExportRequest { Module = project.Name };
-            foreach (var path in settings.FileExports ?? Array.Empty<AbsolutePath>())
+            try
             {
-                if (PublishFile(project, path.ToString(m_pathTable)) is { } reference)
+                foreach (var path in settings.FileExports ?? Array.Empty<AbsolutePath>())
                 {
-                    export.Files.Add(reference);
+                    if (PublishFile(project, path.ToString(m_pathTable)) is { } reference)
+                    {
+                        export.Files.Add(reference);
+                    }
+                }
+                foreach (var path in settings.DirectoryExports ?? Array.Empty<AbsolutePath>())
+                {
+                    if (PublishDirectory(project, new[] { path.ToString(m_pathTable) }) is { } reference)
+                    {
+                        export.Directories.Add(reference);
+                    }
+                }
+                if (export.Files.Count + export.Directories.Count > 0)
+                {
+                    await EmitAsync(new GraphOperation { AddExport = export }, cancellationToken);
                 }
             }
-            foreach (var path in settings.DirectoryExports ?? Array.Empty<AbsolutePath>())
+            catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
             {
-                if (PublishDirectory(project, new[] { path.ToString(m_pathTable) }) is { } reference)
-                {
-                    export.Directories.Add(reference);
-                }
-            }
-            if (export.Files.Count + export.Directories.Count > 0)
-            {
-                await EmitAsync(new GraphOperation { AddExport = export }, cancellationToken);
+                throw new InvalidDataException($"{SourceConsumer}: {exception.Message}", exception);
             }
             await EmitAsync(new GraphOperation { Complete = new CompleteRequest() }, cancellationToken);
             foreach (var directory in project.ExportedDirectories.Values)
@@ -586,7 +600,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                     {
                         m_state.OpaqueFileReads.Add(path, reads = new());
                     }
-                    reads.Add((dynamic[0], m_sourceConsumer ?? project.Name));
+                    reads.Add((dynamic[0], SourceConsumer));
                     return null;
                 }
             }
@@ -596,8 +610,9 @@ namespace BuildXL.FrontEnd.DirectGraph
                 {
                     throw new InvalidDataException($"Generated input '{path}' is not exported by a declared dependency.");
                 }
-                if (m_state.SourceFiles.TryAdd(path, m_sourceConsumer ?? project.Name))
+                if (!m_state.SourceFiles.ContainsKey(path))
                 {
+                    m_state.SourceFiles.Add(path, SourceConsumer);
                     foreach (string ancestor in Ancestors(path))
                     {
                         m_state.SourceCones.TryAdd(ancestor, path);

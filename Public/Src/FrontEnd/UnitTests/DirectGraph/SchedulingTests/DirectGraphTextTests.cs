@@ -1385,6 +1385,25 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Single(m_operations.Where(operation => operation.AddProcess?.Module == "consumer"));
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ConfiguredExportErrorsHaveTheirOwnPhaseContext(bool directory)
+        {
+            var project = Project("p", "directgraph 2\npath 0 \"out/file\"\nstring 0 \"content\"\nwriteFile last\n  destination $p0\n  content $s0");
+            if (directory)
+            {
+                project.DirectoryExports = new[] { Absolute("missing/directory") };
+            }
+            else
+            {
+                project.FileExports = new[] { Absolute("missing/file") };
+            }
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
+            Assert.Contains("Project 'p' configured exports:", error.Message);
+            Assert.DoesNotContain("(p/last)", error.Message);
+        }
+
         [Fact]
         public async Task FailedProjectDoesNotStartDependents()
         {
