@@ -45,6 +45,35 @@ namespace BuildXL.Engine.Cache.KeyValueStores
         public RocksDb Database => m_store;
 
         /// <summary>
+        /// Flushes all column families to SST files and waits for completion. Read-only stores and snapshots are unchanged.
+        /// Like other store operations, this may run concurrently with reads, writes and compaction, but not disposal or schema changes.
+        /// </summary>
+        public void Flush()
+        {
+            if (m_snapshot != null || m_options?.ReadOnly == true)
+            {
+                return;
+            }
+
+            // This RocksDbSharp version exposes flushing through the native binding only.
+            var native = RocksDbSharp.Native.Instance;
+            var options = native.rocksdb_flushoptions_create();
+            try
+            {
+                native.rocksdb_flushoptions_set_wait(options, true);
+                foreach (var column in m_store.GetColumnFamilyNames().Values)
+                {
+                    // Include the default family and the internal key-tracking families.
+                    native.rocksdb_flush_cf(m_store.Handle, options, column.Handle);
+                }
+            }
+            finally
+            {
+                native.rocksdb_flushoptions_destroy(options);
+            }
+        }
+
+        /// <summary>
         /// Maps from column family name to <see cref="ColumnFamilyInfo"/>.
         /// </summary>
         private readonly Dictionary<string, ColumnFamilyInfo> m_columns;

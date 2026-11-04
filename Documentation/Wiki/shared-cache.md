@@ -47,6 +47,30 @@ The cache configuration file can then be passed to BuildXL via command line argu
 
 `bxl.exe /cacheConfigFilePath:<path to the cache config file>`
 
+### Local memoization metadata durability
+
+`MemoizationStoreCacheFactory` periodically flushes the local RocksDB memoization store's
+memtables (all column families) to SST files, waiting for completion. The default interval
+is **600 seconds (10 minutes)**. Set `RocksDbMemoizationStoreFlushIntervalInSeconds` in the
+local cache JSON to override it, for example:
+
+```json
+"RocksDbMemoizationStoreFlushIntervalInSeconds": 600
+```
+
+For `BlobWithLocalCacheFactory`, put this option inside `LocalCache`; it uses the same
+configuration and default. Zero or negative values disable periodic flushing. The generic
+distributed content-location database remains disabled by default, and read-only stores
+do not flush. For RPC/service-backed local memoization caches (including
+`CloudStoreLocalCacheServiceFactory`), set the same option in the owning cache service's
+`DistributedContentSettings`, not the client JSON. The service's local memoization store
+also defaults to 600 seconds. `BuildCacheAdapter` uses remote metadata and is unaffected.
+
+The interval is measured after each completed flush. Failures are traced and retried on the
+next interval. This does **not** enable RocksDB's write-ahead log: an abrupt process termination
+can still lose writes since the last successful flush. It is not a power-loss durability
+guarantee. Flushes can add disk I/O, compaction work, and write stalls with large memtables.
+
  ## Authenticating
 
 The proper credentials need to be provided in order for the BuildXL cache to store and retrieve content from the blob storage account. There are a number of supported auth mechanisms:

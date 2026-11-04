@@ -318,6 +318,7 @@ namespace BuildXL.Cache.Host.Service.Internal
             };
 
             config.Database.CleanOnInitialize = false;
+            config.Database.FlushInterval = TimeSpan.FromSeconds(distributedSettings.RocksDbMemoizationStoreFlushIntervalInSeconds);
             config.Database.OnFailureDeleteExistingStoreAndRetry = true;
 
             return new RocksDbMemoizationStore(SystemClock.Instance, config);

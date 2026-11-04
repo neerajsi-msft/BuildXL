@@ -788,6 +788,14 @@ namespace BuildXL.Cache.Host.Configuration
         [DataMember]
         public bool EnableMetadataStore { get; set; } = false;
 
+        /// <summary>
+        /// Interval in seconds for flushing the service's local RocksDB memoization store.
+        /// Defaults to ten minutes; nonpositive values disable periodic flushing.
+        /// Does not affect distributed content-location databases.
+        /// </summary>
+        [DataMember]
+        public int RocksDbMemoizationStoreFlushIntervalInSeconds { get; set; } = 600;
+
         [DataMember]
         public bool EnableDistributedCache { get; set; } = false;
 

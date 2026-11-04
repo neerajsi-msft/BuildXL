@@ -43,6 +43,8 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         private readonly RocksDbContentLocationDatabaseConfiguration _configuration;
 
         private KeyValueStoreGuard _keyValueStore;
+        private readonly object _flushLock = new object();
+        private Timer? _flushTimer;
         private const string ActiveStoreSlotFileName = "activeSlot.txt";
         private StoreSlot _activeSlot = StoreSlot.Slot1;
         private string? _storeLocation;
@@ -97,10 +99,68 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         }
 
         /// <inheritdoc />
+        protected override async Task<BoolResult> StartupCoreAsync(OperationContext context)
+        {
+            var result = await base.StartupCoreAsync(context);
+            if (result.Succeeded && !_configuration.OpenReadOnly && _configuration.FlushInterval > TimeSpan.Zero)
+            {
+                lock (_flushLock)
+                {
+                    Timer? timer = null;
+                    timer = new Timer(
+                        _ => PerformFlush(context, timer!),
+                        null,
+                        _configuration.FlushInterval,
+                        Timeout.InfiniteTimeSpan);
+                    _flushTimer = timer;
+                }
+            }
+
+            return result;
+        }
+
+        private void PerformFlush(OperationContext context, Timer timer)
+        {
+            // Serialize flushes and shutdown, not normal reads/writes. A one-shot timer avoids overlapping flushes.
+            lock (_flushLock)
+            {
+                if (_flushTimer != timer || ShutdownStarted)
+                {
+                    return;
+                }
+
+                try
+                {
+                    context.PerformOperation(
+                        Tracer,
+                        () => _keyValueStore.Use(store => store.Flush()).ToBoolResult(),
+                        counter: Counters[ContentLocationDatabaseCounters.Flush]).IgnoreFailure();
+                }
+                catch (Exception exception)
+                {
+                    Tracer.Error(context, exception: exception, message: "Failed to flush database", operation: nameof(PerformFlush));
+                }
+                finally
+                {
+                    if (!ShutdownStarted)
+                    {
+                        timer.Change(_configuration.FlushInterval, Timeout.InfiniteTimeSpan);
+                    }
+                }
+            }
+        }
+
+        /// <inheritdoc />
         protected override Task<BoolResult> ShutdownCoreAsync(OperationContext context)
         {
-            _keyValueStore?.Dispose();
+            lock (_flushLock)
+            {
+                // Wait for any in-flight flush before disposing the store. Queued callbacks will see a null timer.
+                _flushTimer?.Dispose();
+                _flushTimer = null;
+            }
 
+            _keyValueStore?.Dispose();
             return base.ShutdownCoreAsync(context);
         }
 

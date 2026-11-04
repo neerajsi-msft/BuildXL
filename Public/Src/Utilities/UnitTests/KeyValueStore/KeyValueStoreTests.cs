@@ -37,6 +37,58 @@ namespace Test.BuildXL.Engine.Cache
             }
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void FlushPersistsAllColumnsWithoutClosingStore(bool flush)
+        {
+            var configuration = new RocksDbStoreConfiguration(StoreDirectory)
+            {
+                EnableWriteAheadLog = false,
+                DefaultColumnKeyTracked = true,
+                AdditionalColumns = new[] { "metadata" },
+                AdditionalKeyTrackedColumns = new[] { "tracked" },
+            };
+            using var accessor = KeyValueStoreAccessor.Open(configuration).Result;
+            string?[] columns = { null, "metadata", "tracked" };
+            XAssert.IsTrue(accessor.Use(store =>
+            {
+                foreach (var column in columns)
+                {
+                    store.Put("key", "value", column);
+                }
+
+                if (flush)
+                {
+                    store.Flush();
+                }
+            }).Succeeded);
+
+            // Copy ordinary files while the writer remains open, without a checkpoint (which itself flushes).
+            // With these small, quiescent writes there are no concurrent compactions or manifest updates.
+            var copy = Path.Combine(TemporaryDirectory, "copy");
+            Directory.CreateDirectory(copy);
+            foreach (var file in Directory.GetFiles(StoreDirectory))
+            {
+                File.Copy(file, Path.Combine(copy, Path.GetFileName(file)));
+            }
+
+            using var reopened = KeyValueStoreAccessor.Open(copy, openReadOnly: true).Result;
+            XAssert.IsTrue(reopened.Use(store =>
+            {
+                store.Flush(); // Read-only stores must allow this as a no-op.
+                foreach (var column in columns)
+                {
+                    XAssert.AreEqual(flush, store.TryGetValue("key", out string? value, column));
+                    XAssert.AreEqual(flush, store.Contains("key", column));
+                    if (flush)
+                    {
+                        XAssert.AreEqual("value", value);
+                    }
+                }
+            }).Succeeded);
+        }
+
         [Fact]
         public void PutGetKey()
         {
