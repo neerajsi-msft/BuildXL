@@ -27,3 +27,8 @@ files without needing a covering seal, like DScript's `AddInputFile`. Known
 generated/private outputs never fall back to sources. Explicit source files do
 not implicitly attach covering seals; directory read grants require explicit
 `inputDirectory` dependencies.
+
+Configuration exports and trailing fragment `export` declarations are combined.
+Identical artifacts are published once; same-path conflicts (including different
+file rewrite counts or directory seal identities) are errors. Re-exporting
+dependency artifacts is explicit and does not widen dependency visibility.

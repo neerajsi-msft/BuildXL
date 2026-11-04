@@ -1037,6 +1037,64 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.True(Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<CopyFile>()).Source.IsSourceFile);
         }
 
+        [Fact]
+        public async Task ConfigurationAndFragmentExportsMergeIdenticalArtifactsBeforeSending()
+        {
+            var project = Project("p", """
+                directgraph 2
+                path 0 "out/file"
+                path 1 "out"
+                string 0 "content"
+                writeFile file
+                  destination $p0
+                  content $s0
+                sealDirectory seal
+                  directoryRoot $p1
+                  content $p0
+                export first
+                  file $p0
+                  file $p0
+                  directory $p1
+                export again
+                  file $p0
+                  directory $p1 seal
+                """);
+            project.FileExports = new[] { Absolute("out/file"), Absolute("out/file") };
+            project.DirectoryExports = new[] { Absolute("out"), Absolute("out") };
+            await Load(new[] { project });
+            var export = Assert.Single(m_operations.Where(operation => operation.AddExport != null)).AddExport;
+            Assert.Single(export.Files);
+            Assert.Single(export.Directories);
+            var outputs = Assert.Single(m_outputs).Value;
+            Assert.Single(outputs.Files);
+            Assert.Single(outputs.Directories);
+        }
+
+        [Fact]
+        public async Task SamePathDifferentDirectoryArtifactsCannotBeMerged()
+        {
+            var project = Project("p", """
+                directgraph 2
+                path 0 "out"
+                path 1 "tool"
+                path 2 "."
+                process first
+                  executable $p1
+                  workingDirectory $p2
+                  outputDirectory $p0 shared
+                process second
+                  executable $p1
+                  workingDirectory $p2
+                  outputDirectory $p0 shared
+                export one
+                  directory $p0 first
+                export two
+                  directory $p0 second
+                """);
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
+            Assert.Contains("Conflicting directory export identities", error.Message);
+        }
+
         private DirectGraphProjectSettings Project(string name, string text, params string[] dependencies)
         {
             var file = Absolute(name + ".dg");

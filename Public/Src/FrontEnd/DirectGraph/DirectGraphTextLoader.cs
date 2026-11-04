@@ -129,7 +129,10 @@ namespace BuildXL.FrontEnd.DirectGraph
                             throw new InvalidDataException("Export records must follow all construction records in a project.");
                         }
                         var operation = CreateOperation(project, record, sourceExists, out var data);
-                        await EmitAsync(operation, cancellationToken, data);
+                        if (operation != null)
+                        {
+                            await EmitAsync(operation, cancellationToken, data);
+                        }
                     }
                     catch (InvalidDataException exception)
                     {
@@ -140,11 +143,17 @@ namespace BuildXL.FrontEnd.DirectGraph
             var export = new AddExportRequest { Module = project.Name };
             foreach (var path in settings.FileExports ?? Array.Empty<AbsolutePath>())
             {
-                export.Files.Add(PublishFile(project, path.ToString(m_pathTable)));
+                if (PublishFile(project, path.ToString(m_pathTable)) is { } reference)
+                {
+                    export.Files.Add(reference);
+                }
             }
             foreach (var path in settings.DirectoryExports ?? Array.Empty<AbsolutePath>())
             {
-                export.Directories.Add(PublishDirectory(project, new[] { path.ToString(m_pathTable) }));
+                if (PublishDirectory(project, new[] { path.ToString(m_pathTable) }) is { } reference)
+                {
+                    export.Directories.Add(reference);
+                }
             }
             if (export.Files.Count + export.Directories.Count > 0)
             {
@@ -318,19 +327,34 @@ namespace BuildXL.FrontEnd.DirectGraph
                 case "export":
                     project.ExportStarted = true;
                     var export = new AddExportRequest { Module = project.Name };
-                    foreach (string path in fields.Values("file"))
-                    {
-                        export.Files.Add(PublishFile(project, Absolute(project, path)));
-                    }
-                    foreach (var values in fields.Rows("directory"))
-                    {
-                        export.Directories.Add(PublishDirectory(project, values));
-                    }
-                    if (export.Files.Count + export.Directories.Count == 0)
+                    var exportFiles = fields.Values("file").ToArray();
+                    var exportDirectories = fields.Rows("directory");
+                    if (exportFiles.Length + exportDirectories.Count == 0)
                     {
                         throw new InvalidDataException("An export must publish at least one artifact.");
                     }
-                    operation.AddExport = export;
+                    foreach (string path in exportFiles)
+                    {
+                        if (PublishFile(project, Absolute(project, path)) is { } reference)
+                        {
+                            export.Files.Add(reference);
+                        }
+                    }
+                    foreach (var values in exportDirectories)
+                    {
+                        if (PublishDirectory(project, values) is { } reference)
+                        {
+                            export.Directories.Add(reference);
+                        }
+                    }
+                    if (export.Files.Count + export.Directories.Count == 0)
+                    {
+                        operation = null;
+                    }
+                    else
+                    {
+                        operation.AddExport = export;
+                    }
                     break;
                 default:
                     throw new InvalidDataException($"Unknown operation '{record.Kind}'.");
@@ -582,20 +606,38 @@ namespace BuildXL.FrontEnd.DirectGraph
         {
             var reference = ResolveFile(project, path, null);
             var binding = Binding(project, path, reference);
-            if (binding.Id == 0 || project.ExportedDirectories.ContainsKey(path) || !project.ExportedFiles.TryAdd(path, binding))
+            if (binding.Id == 0 || project.ExportedDirectories.ContainsKey(path))
             {
-                throw new InvalidDataException($"Export '{path}' must be a unique produced file.");
+                throw new InvalidDataException($"Export '{path}' must name a produced file and cannot conflict with a directory export.");
             }
+            if (project.ExportedFiles.TryGetValue(path, out var previous))
+            {
+                if (previous.Artifact != binding.Artifact)
+                {
+                    throw new InvalidDataException($"Conflicting file export identities at '{path}'.");
+                }
+                return null;
+            }
+            project.ExportedFiles.Add(path, binding);
             return reference;
         }
 
         private DirectoryArtifactReference PublishDirectory(Project project, string[] values)
         {
             var directory = ResolveDirectory(project, values);
-            if (project.ExportedFiles.ContainsKey(directory.Path) || !project.ExportedDirectories.TryAdd(directory.Path, directory))
+            if (project.ExportedFiles.ContainsKey(directory.Path))
             {
-                throw new InvalidDataException($"Duplicate export '{directory.Path}'.");
+                throw new InvalidDataException($"Directory export '{directory.Path}' conflicts with a file export.");
             }
+            if (project.ExportedDirectories.TryGetValue(directory.Path, out var previous))
+            {
+                if (previous.Artifact != directory.Artifact)
+                {
+                    throw new InvalidDataException($"Conflicting directory export identities at '{directory.Path}'.");
+                }
+                return null;
+            }
+            project.ExportedDirectories.Add(directory.Path, directory);
             return DirectoryReference(directory);
         }
 

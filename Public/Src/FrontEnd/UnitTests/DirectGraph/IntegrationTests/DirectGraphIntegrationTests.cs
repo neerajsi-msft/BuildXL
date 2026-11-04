@@ -47,6 +47,8 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             }
 
             root = Path.GetFullPath(root);
+            string inputFragment(string project) => File.Exists(Path.Combine(root, project + "-inputs.dg"))
+                ? $"f`{root.Replace('\\', '/')}/{project}-inputs.dg`, " : "";
             var config = Build()
                 .Configuration($$"""
                     config({
@@ -56,12 +58,12 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                                 { name: a`tools`, root: d`{{root.Replace('\\', '/')}}`,
                                   graphFiles: [f`{{root.Replace('\\', '/')}}/tools.dg`] },
                                 { name: a`producer`, root: d`{{root.Replace('\\', '/')}}/producer`,
-                                  graphFiles: [f`{{root.Replace('\\', '/')}}/producer.dg`],
+                                  graphFiles: [{{inputFragment("producer")}}f`{{root.Replace('\\', '/')}}/producer.dg`],
                                   dependencies: ["tools"],
                                   fileExports: [p`{{root.Replace('\\', '/')}}/producer/generated.h`,
                                                 p`{{root.Replace('\\', '/')}}/producer/generated-input.txt`] },
                                 { name: a`consumer`, root: d`{{root.Replace('\\', '/')}}/consumer`,
-                                  graphFiles: [f`{{root.Replace('\\', '/')}}/consumer.dg`],
+                                  graphFiles: [{{inputFragment("consumer")}}f`{{root.Replace('\\', '/')}}/consumer.dg`],
                                   dependencies: ["producer", "tools"],
                                   fileExports: [p`{{root.Replace('\\', '/')}}/consumer/consumer.out`] },
                             ],
@@ -344,7 +346,9 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         [InlineData(true, true, true)]
         [InlineData(false, true, true)]
         [InlineData(true, false, false)]
-        public void DuplicateExportPathsFailTheBuild(bool firstIsDirectory, bool secondIsDirectory, bool sameMessage)
+        [InlineData(false, false, false)]
+        [InlineData(true, true, false)]
+        public void DuplicateExportsMergeOnlyIdenticalArtifacts(bool firstIsDirectory, bool secondIsDirectory, bool sameMessage)
         {
             string exportOperation(string name, params bool[] directoryKinds) => JsonSerializer.Serialize(new
             {
@@ -381,11 +385,61 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             using var tempFiles = new TempFileStorage(canGetFileNames: true, rootPath: TestOutputDirectory);
             var result = CreateAndRunEngine(config, CreateAppDeployment(tempFiles), testRootDirectory: null, rememberAllChangedTrackedInputs: true, engine: out _);
 
+            if (firstIsDirectory == secondIsDirectory)
+            {
+                Assert.True(result.IsSuccess);
+                return;
+            }
             Assert.False(result.IsSuccess);
             AssertErrorEventLogged(global::BuildXL.Engine.DirectGraph.Tracing.LogEventId.GraphOperationRejected);
             Assert.Contains(
                 EventListener.GetLogMessagesForEventId((int)global::BuildXL.Engine.DirectGraph.Tracing.LogEventId.GraphOperationRejected),
                 message => message.Contains("already exports"));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ExternalExportsRejectDifferentArtifactIdentitiesAtTheSamePath(bool directory)
+        {
+            string declarations = directory ? """
+                { "name": "first", "kind": "sealDirectory", "directoryRoot": "src", "sealKind": "sourceAllDirectories" },
+                { "name": "second", "kind": "sealDirectory", "directoryRoot": "src", "sealKind": "sourceTopDirectoryOnly" }
+                """ : $$"""
+                { "name": "first", "kind": "writeFile", "destination": "out/key", "content": "first" },
+                { "name": "second", "kind": "process", "executable": {{JsonSerializer.Serialize(OperatingSystemHelper.IsWindowsOS ? CmdHelper.CmdX64 : CmdHelper.Bash)}},
+                  "workingDirectory": ".", "options": ["dependsOnCurrentOs"],
+                  "rewrittenFiles": [{ "producedBy": "first", "path": "out/key" }] }
+                """;
+            string field = directory ? "directories" : "files";
+            string path = directory ? "src" : "out/key";
+            var config = Build()
+                .Configuration($$"""
+                    config({
+                        resolvers: [{{Resolver("producer", "graph.json")}}],
+                        mounts: [{ name: a`out`, path: p`out`, trackSourceFileChanges: true, isReadable: true, isWritable: true }],
+                    });
+                    """)
+                .AddFile("graph.json", $$"""
+                    { "modules": [{ "name": "producer", "operations": [
+                        {{declarations}},
+                        { "name": "publishFirst", "kind": "export", "{{field}}": [{ "producedBy": "first", "path": "{{path}}" }] },
+                        { "name": "publishSecond", "kind": "export", "{{field}}": [{ "producedBy": "second", "path": "{{path}}" }] }
+                    ] }] }
+                    """)
+                .AddFile("src/input.txt", "source")
+                .PersistSpecsAndGetConfiguration();
+            var mutableConfig = (CommandLineConfiguration)config;
+            mutableConfig.Engine.Phase = EnginePhases.Execute;
+            mutableConfig.Sandbox.FileSystemMode = FileSystemMode.RealAndMinimalPipGraph;
+            mutableConfig.DisableInBoxSdkSourceResolver = true;
+            using var tempFiles = new TempFileStorage(canGetFileNames: true, rootPath: TestOutputDirectory);
+            var result = CreateAndRunEngine(config, CreateAppDeployment(tempFiles), testRootDirectory: null,
+                rememberAllChangedTrackedInputs: true, engine: out _);
+            Assert.False(result.IsSuccess);
+            AssertErrorEventLogged(global::BuildXL.Engine.DirectGraph.Tracing.LogEventId.GraphOperationRejected);
+            Assert.Contains(EventListener.GetLogMessagesForEventId((int)global::BuildXL.Engine.DirectGraph.Tracing.LogEventId.GraphOperationRejected),
+                message => message.Contains("conflicting artifact identity"));
         }
 
         [Fact]

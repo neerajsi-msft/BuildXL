@@ -164,10 +164,14 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
 
             var key = EvaluationResult.Create(artifact.Path);
-            if (exports.Files.ContainsKey(key) || exports.Directories.ContainsKey(key))
+            if (exports.Files.TryGetValue(key, out var existingFile) || exports.Directories.ContainsKey(key))
             {
-                error = $"Module '{moduleName}' already exports '{artifact.Path.ToString(m_context.PathTable)}'. A path can be exported only once, across both files and directories.";
-                return false;
+                bool identical = artifact.IsFile
+                    ? existingFile.Value is FileArtifact file && file == artifact.FileArtifact
+                    : exports.Directories.TryGetValue(key, out var existingDirectory) &&
+                        existingDirectory.Value is StaticDirectory directory && directory.Root == artifact.DirectoryArtifact;
+                error = identical ? null : $"Module '{moduleName}' already exports '{artifact.Path.ToString(m_context.PathTable)}' with a conflicting artifact identity.";
+                return identical;
             }
 
             if (artifact.IsFile)
