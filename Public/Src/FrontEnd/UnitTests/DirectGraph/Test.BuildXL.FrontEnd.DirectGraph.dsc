@@ -55,6 +55,7 @@ namespace Test.DirectGraph {
             importFrom("BuildXL.FrontEnd").Utilities.dll,
             importFrom("BuildXL.FrontEnd").TypeScript.Net.dll,
             importFrom("BuildXL.Pips").dll,
+            importFrom("BuildXL.Utilities").Storage.dll,
             importFrom("BuildXL.Utilities").dll,
             importFrom("BuildXL.Utilities").Configuration.dll,
             importFrom("BuildXL.Utilities").Script.Constants.dll,

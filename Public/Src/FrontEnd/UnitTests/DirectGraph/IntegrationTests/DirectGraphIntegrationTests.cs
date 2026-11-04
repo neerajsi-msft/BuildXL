@@ -4,7 +4,10 @@
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using BuildXL.Engine;
+using BuildXL.Pips;
+using BuildXL.Pips.Operations;
 using BuildXL.Utilities.Configuration;
 using BuildXL.Utilities.Configuration.Mutable;
 using BuildXL.Utilities.Core;
@@ -21,12 +24,14 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
     /// </summary>
     public sealed class DirectGraphIntegrationTests : DsTestWithCacheBase
     {
+        private readonly ITestOutputHelper m_output;
         // CODESYNC: Public/Src/FrontEnd/UnitTests/DirectGraph/Test.BuildXL.FrontEnd.DirectGraph.dsc
         private string PathToEmitter => Path.Combine(TestDeploymentDir, "tools", "GraphEmitter", OperatingSystemHelper.IsWindowsOS ? "GraphEmitter.exe" : "GraphEmitter");
 
         public DirectGraphIntegrationTests(ITestOutputHelper output)
             : base(output, usePassThroughFileSystem: true)
         {
+            m_output = output;
             RegisterEventSource(global::BuildXL.Processes.ETWLogger.Log);
             RegisterEventSource(global::BuildXL.Scheduler.ETWLogger.Log);
             RegisterEventSource(global::BuildXL.Pips.ETWLogger.Log);
@@ -89,6 +94,206 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.True(result.IsSuccess);
             Assert.Equal(new[] { "#define GENERATED_VALUE 37", "directgraph-input" },
                 File.ReadAllLines(Path.Combine(root, "consumer", "consumer.out")));
+        }
+
+        [FactIfSupported(requiresLinuxBasedOperatingSystem: true)]
+        public void ParallelProjectConstructionPreservesNativeFingerprintsAndPaths()
+        {
+            string producer(string name, bool automaticTemp) => $$"""
+                directgraph 2
+                path 0 "/bin/bash"
+                path 1 "."
+                path 2 "out/{{name}}.in"
+                path 3 "out/shared/{{name}}.txt"
+                path 4 "out/shared"
+                path 5 "out/{{name}}-temp"
+                path 6 "out/base.txt"
+                path 7 "out"
+                string 0 "{{name}}"
+                string 1 "-c"
+                string 2 "mkdir -p out/shared && cat out/{{name}}.in > out/shared/{{name}}.txt"
+                writeFile prepare
+                  destination $p2
+                  content $s0
+                process work
+                  executable $p0
+                  workingDirectory $p1
+                  input $p2
+                  input $p6
+                  inputDirectory $p7 base/baseSeal
+                  argument $s1
+                  argument $s2
+                  option dependsOnCurrentOs
+                  output $p3
+                  outputDirectory $p4 shared
+                  {{(automaticTemp ? "enableTempDirectory true" : "tempDirectory $p5")}}
+                export publish
+                  file $p3
+                  directory $p4 work
+                export again
+                  file $p3
+                  directory $p4 work
+                """;
+            var config = Build()
+                .Configuration("""
+                    config({
+                        resolvers: [{
+                            kind: "DirectGraph", roots: ["top", "independent"],
+                            projects: [
+                                { name: a`base`, root: d`.`, graphFiles: [f`base.dg`],
+                                  fileExports: [p`out/base.txt`], directoryExports: [p`out`] },
+                                { name: a`left`, root: d`.`, graphFiles: [f`left.dg`], dependencies: ["base"],
+                                  fileExports: [p`out/shared/left.txt`] },
+                                { name: a`right`, root: d`.`, graphFiles: [f`right.dg`], dependencies: ["base"],
+                                  fileExports: [p`out/shared/right.txt`] },
+                                { name: a`independent`, root: d`.`, graphFiles: [f`independent.dg`] },
+                                { name: a`join`, root: d`.`, graphFiles: [f`join.dg`],
+                                  dependencies: ["left", "right"], fileExports: [p`out/join.txt`] },
+                                { name: a`top`, root: d`.`, graphFiles: [f`top.dg`],
+                                  dependencies: ["join", "left", "right"] },
+                            ],
+                        }],
+                        mounts: [{ name: a`out`, path: p`out`, isWritable: true, isReadable: true, trackSourceFileChanges: true }],
+                    });
+                    """)
+                .AddFile("base.dg", """
+                    directgraph 2
+                    path 0 "out/base.txt"
+                    path 1 "out"
+                    string 0 "base"
+                    writeFile prepare
+                      destination $p0
+                      content $s0
+                    sealDirectory baseSeal
+                      directoryRoot $p1
+                      content $p0
+                    export publish
+                      file $p0
+                      directory $p1
+                    """)
+                .AddFile("left.dg", producer("left", automaticTemp: true))
+                .AddFile("right.dg", producer("right", automaticTemp: false))
+                .AddFile("independent.dg", """
+                    directgraph 2
+                    path 0 "/bin/bash"
+                    path 1 "."
+                    path 2 "out/independent.txt"
+                    string 0 "-c"
+                    string 1 "printf independent > out/independent.txt"
+                    process work
+                      executable $p0
+                      workingDirectory $p1
+                      argument $s0
+                      argument $s1
+                      option dependsOnCurrentOs
+                      enableTempDirectory true
+                      output $p2
+                    """)
+                .AddFile("join.dg", """
+                    directgraph 2
+                    path 0 "out/shared"
+                    path 1 "out/shared/left.txt"
+                    path 2 "out/shared/right.txt"
+                    path 3 "/bin/bash"
+                    path 4 "."
+                    path 5 "out/join.txt"
+                    string 0 "-c"
+                    string 1 "cat out/shared/left.txt out/shared/right.txt > out/join.txt"
+                    composeSharedOpaque combined
+                      directoryRoot $p0
+                      directory $p0 left/work
+                      directory $p0 right/work
+                    process work
+                      executable $p3
+                      workingDirectory $p4
+                      input $p1
+                      input $p2
+                      inputDirectory $p0 combined
+                      argument $s0
+                      argument $s1
+                      option dependsOnCurrentOs
+                      enableTempDirectory true
+                      output $p5
+                    export publish
+                      file $p5
+                      directory $p0 combined
+                    export again
+                      file $p5
+                      directory $p0 combined
+                    """)
+                .AddFile("top.dg", """
+                    directgraph 2
+                    path 0 "/bin/bash"
+                    path 1 "."
+                    path 2 "out/join.txt"
+                    path 3 "out/top.txt"
+                    path 4 "out/shared"
+                    string 0 "-c"
+                    string 1 "cat out/join.txt > out/top.txt"
+                    process work
+                      executable $p0
+                      workingDirectory $p1
+                      input $p2
+                      inputDirectory $p4 join/combined
+                      argument $s0
+                      argument $s1
+                      option dependsOnCurrentOs
+                      enableTempDirectory true
+                      output $p3
+                    """)
+                .PersistSpecsAndGetConfiguration();
+            var mutable = (CommandLineConfiguration)config;
+            mutable.Engine.Phase = EnginePhases.Execute;
+            mutable.Sandbox.FileSystemMode = FileSystemMode.RealAndMinimalPipGraph;
+            mutable.DisableInBoxSdkSourceResolver = true;
+            mutable.Cache.CacheGraph = false;
+            mutable.Cache.AllowFetchingCachedGraphFromContentCache = false;
+            mutable.Schedule.ComputePipStaticFingerprints = true;
+            using var tempFiles = new TempFileStorage(canGetFileNames: true, rootPath: TestOutputDirectory);
+            var deployment = CreateAppDeployment(tempFiles);
+            string[] baseline = null;
+            foreach (int concurrency in new[] { 1, 4, 4, 4 })
+            {
+                mutable.FrontEnd.MaxFrontEndConcurrency = concurrency;
+                var elapsed = Stopwatch.StartNew();
+                var result = CreateAndRunEngine(config, deployment, testRootDirectory: null,
+                    rememberAllChangedTrackedInputs: true, engine: out _);
+                m_output.WriteLine($"DirectGraph six-project cold construction /maxFrontEndConcurrency:{concurrency}, whole engine run: {elapsed.ElapsedMilliseconds}ms");
+                Assert.True(result.IsSuccess);
+                var graph = result.EngineState.PipGraph;
+                var fingerprints = graph.AllPipStaticFingerprints.ToDictionary(pair => pair.Key, pair => pair.Value.ToString());
+                string path(AbsolutePath value) => value.IsValid ? value.ToString(PathTable) : "";
+                var pips = new[] { PipType.Process, PipType.WriteFile, PipType.SealDirectory, PipType.CopyFile }
+                    .SelectMany(type => graph.RetrievePipsOfType(type)).ToArray();
+                var snapshot = pips.Select(pip =>
+                {
+                    Assert.True(fingerprints.ContainsKey(pip.PipId));
+                    string products = pip switch
+                    {
+                        Process process => string.Join(";", process.FileOutputs.Select(file => path(file.Path)).OrderBy(value => value)) +
+                            "|" + string.Join(";", process.DirectoryOutputs.Select(directory => path(directory.Path)).OrderBy(value => value)) +
+                            "|" + path(process.TempDirectory) + "|" + path(process.StandardDirectory),
+                        WriteFile write => path(write.Destination.Path),
+                        CopyFile copy => path(copy.Destination.Path),
+                        SealDirectory seal => path(seal.DirectoryRoot) + "|" + seal.Kind,
+                        _ => throw new System.InvalidOperationException(),
+                    };
+                    return $"{pip.PipType}|{pip.SemiStableHash:X16}|{fingerprints[pip.PipId]}|{products}";
+                }).OrderBy(value => value, System.StringComparer.Ordinal).ToArray();
+                Assert.Equal(5, pips.OfType<Process>().Count());
+                Assert.Contains(pips.OfType<SealDirectory>(), seal => seal.IsComposite);
+                Assert.All(pips.OfType<Process>(), process => Assert.True(process.TempDirectory.IsValid));
+                if (baseline == null)
+                {
+                    baseline = snapshot;
+                }
+                else
+                {
+                    Assert.Equal(baseline, snapshot);
+                    Assert.Equal(5, result.EnginePerformanceInfo.SchedulerPerformanceInfo.ProcessPipCacheHits);
+                }
+                Assert.Equal("leftright", File.ReadAllText(Path.Combine(TestRoot, "out", "top.txt")));
+            }
         }
 
         [Fact]
