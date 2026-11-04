@@ -999,6 +999,59 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Contains("p/run", error.Message);
         }
 
+        [Theory]
+        [InlineData(false, "scratch/child/..", true)]
+        [InlineData(true, "scratch/child/..", true)]
+        [InlineData(true, "scratch/child", true)]
+        [InlineData(true, "scratch-other", false)]
+        public async Task ExplicitTempClaimsAreIsolatedAcrossProcessesAndProjects(bool acrossProjects, string secondTemp, bool rejected)
+        {
+            string header = $"directgraph 2\npath 0 \"tool\"\npath 1 \".\"\npath 2 \"scratch\"\npath 3 \"{secondTemp}\"\npath 4 \"out/one\"\npath 5 \"out/two\"\n";
+            string process(string name, int temp, int output) =>
+                $"process {name}\n  executable $p0\n  workingDirectory $p1\n  tempDirectory $p{temp}\n  output $p{output}\n";
+            var first = Project("first", header + process("one", 2, 4) + (acrossProjects ? "" : process("two", 3, 5)));
+            var projects = acrossProjects
+                ? new[] { Project("second", header + process("two", 3, 5), "first"), first }
+                : new[] { first };
+            if (rejected)
+            {
+                var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(projects));
+                Assert.Contains(acrossProjects ? "(second/two)" : "(first/two)", error.Message);
+                Assert.Contains(".dg:", error.Message);
+                Assert.Contains("overlaps explicit temp directory", error.Message);
+                Assert.Contains("claimed by 'first/one'", error.Message);
+            }
+            else
+            {
+                await Load(projects);
+                var processes = m_pipGraph.RetrieveScheduledPips().OfType<Process>().ToArray();
+                Assert.Equal(2, processes.Length);
+                Assert.NotEqual(processes[0].TempDirectory, processes[1].TempDirectory);
+            }
+        }
+
+        [Theory]
+        [InlineData("region/file", "region", false, false)]
+        [InlineData("region/file", "region", false, true)]
+        [InlineData("region", "region/scratch", true, false)]
+        [InlineData("region", "region/scratch", true, true)]
+        [InlineData("region", "region", false, false)]
+        [InlineData("region", "region", false, true)]
+        public async Task ExplicitTempsCannotOverlapOutputsInEitherDeclarationOrder(string output, string temp, bool directory, bool tempFirst)
+        {
+            string header = $"directgraph 2\npath 0 \"tool\"\npath 1 \".\"\npath 2 \"{output}\"\npath 3 \"{temp}\"\npath 4 \"elsewhere/result\"\nstring 0 \"content\"\n";
+            const string scratch = "process scratch\n  executable $p0\n  workingDirectory $p1\n  tempDirectory $p3\n  output $p4\n";
+            string generated = directory
+                ? "process generated\n  executable $p0\n  workingDirectory $p1\n  outputDirectory $p2 shared\n"
+                : "writeFile generated\n  destination $p2\n  content $s0\n";
+            var project = Project("p", header + (tempFirst ? scratch + generated : generated + scratch));
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
+            Assert.Contains(tempFirst ? "(p/generated)" : "(p/scratch)", error.Message);
+            Assert.Contains("p.dg:", error.Message);
+            Assert.Contains("overlaps", error.Message);
+            Assert.Contains("temp directory", error.Message);
+        }
+
         [Fact]
         public async Task SourceExclusionsReachNativeSealWithoutGatingExplicitFiles()
         {

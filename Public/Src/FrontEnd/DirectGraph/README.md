@@ -10,7 +10,9 @@ Processes may specify `tempDirectory $pID` or `enableTempDirectory true`
 allocation is enabled. Neither is a loader default or a process option.
 Automatic allocation uses the native per-process unique temp directory, including
 native cleanup, untracking and temp environment bindings. Explicit paths must be
-unique to their processes.
+unique to their processes. The text loader rejects overlapping explicit temp
+claims across projects and overlap with generated files/output-directory roots,
+in either declaration order. Use sibling paths or opt-in automatic allocation.
 
 `semaphore $sNAME LIMIT INCREMENT` adds a named native semaphore. Names must be
 nonempty and unique within a process; integers are positive decimal values and

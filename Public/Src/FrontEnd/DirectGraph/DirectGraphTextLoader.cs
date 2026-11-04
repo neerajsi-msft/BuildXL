@@ -63,6 +63,7 @@ namespace BuildXL.FrontEnd.DirectGraph
             internal readonly List<DirectoryBinding> Directories = new();
             internal readonly List<DirectoryBinding> SourceDirectories = new();
             internal readonly HashSet<string> DynamicRoots = new(s_paths);
+            internal readonly Dictionary<string, string> ExplicitTempDirectories = new(s_paths);
             internal readonly HashSet<string> ConfiguredOutputs = new(s_paths);
             internal readonly Dictionary<FileArtifact, FileBinding> FileArtifacts = new();
             internal readonly Dictionary<(string Project, AbsolutePath Path), DirectoryBinding> DirectoryExports = new();
@@ -405,7 +406,9 @@ namespace BuildXL.FrontEnd.DirectGraph
             string temp = fields.One("tempDirectory");
             if (temp != null)
             {
-                process.TempDirectory = m_values.Path(Absolute(project, temp));
+                string path = Absolute(project, temp);
+                ClaimTempDirectory(project, name, path);
+                process.TempDirectory = m_values.Path(path);
             }
             string automaticTemp = fields.One("enableTempDirectory");
             if (automaticTemp != null)
@@ -641,8 +644,31 @@ namespace BuildXL.FrontEnd.DirectGraph
             return DirectoryReference(directory);
         }
 
+        private void ClaimTempDirectory(Project project, string name, string path)
+        {
+            EnsureNoTempOverlap(path, "Explicit temp directory");
+            if (m_state.Files.Keys.Any(output => Overlaps(path, output)) ||
+                m_state.DynamicRoots.Any(root => Overlaps(path, root)))
+            {
+                throw new InvalidDataException($"Explicit temp directory '{path}' overlaps a claimed generated output.");
+            }
+            m_state.ExplicitTempDirectories.Add(path, $"{project.Name}/{name}");
+        }
+
+        private void EnsureNoTempOverlap(string path, string kind)
+        {
+            foreach (var claim in m_state.ExplicitTempDirectories)
+            {
+                if (Overlaps(path, claim.Key))
+                {
+                    throw new InvalidDataException($"{kind} '{path}' overlaps explicit temp directory '{claim.Key}' claimed by '{claim.Value}'.");
+                }
+            }
+        }
+
         private void ClaimFile(Project project, string path, ulong id, bool rewrite = false)
         {
+            EnsureNoTempOverlap(path, "Generated output");
             if (m_state.SourceDirectories.Any(directory => Within(path, directory.Path)))
             {
                 throw new InvalidDataException($"Generated output '{path}' overlaps a source seal.");
@@ -659,6 +685,10 @@ namespace BuildXL.FrontEnd.DirectGraph
 
         private void AddDirectory(Project project, DirectoryBinding directory)
         {
+            if (directory.Dynamic)
+            {
+                EnsureNoTempOverlap(directory.Path, "Generated directory");
+            }
             if (directory.Dynamic && m_state.SourceDirectories.Any(source => Overlaps(source.Path, directory.Path)))
             {
                 throw new InvalidDataException($"Generated directory '{directory.Path}' overlaps a source seal.");
