@@ -1749,6 +1749,43 @@ namespace IntegrationTest.BuildXL.Scheduler
             }
         }
 
+        [Fact]
+        public void NameOnlyPassThroughRetainsCacheAndBindsRuntimePresenceAndAbsence()
+        {
+            string name = "DG_PASSTHROUGH_" + Guid.NewGuid().ToString("N");
+            (Process Process, FileArtifact Output) Construct()
+            {
+                var output = CreateOutputFileArtifact();
+                var builder = CreatePipBuilder(new[] { Operation.WriteEnvVariableToFile(output, name) });
+                builder.SetPassthroughEnvironmentVariable(StringId.Create(Context.StringTable, name));
+                return (SchedulePipBuilder(builder).Process, output);
+            }
+            try
+            {
+                var absent = Construct();
+                RunScheduler().AssertCacheMiss(absent.Process.PipId);
+                Assert.Equal(string.Empty, File.ReadAllText(absent.Output.Path.ToString(Context.PathTable)));
+                Environment.SetEnvironmentVariable(name, "runtime");
+                RunScheduler().AssertCacheHit(absent.Process.PipId);
+                Assert.Equal(string.Empty, File.ReadAllText(absent.Output.Path.ToString(Context.PathTable)));
+
+                ResetPipGraphBuilder();
+                var present = Construct();
+                RunScheduler().AssertCacheMiss(present.Process.PipId);
+                Assert.Equal("runtime", File.ReadAllText(present.Output.Path.ToString(Context.PathTable)));
+
+                Environment.SetEnvironmentVariable(name, null);
+                ResetPipGraphBuilder();
+                var removed = Construct();
+                RunScheduler().AssertCacheMiss(removed.Process.PipId);
+                Assert.Equal(string.Empty, File.ReadAllText(removed.Output.Path.ToString(Context.PathTable)));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(name, null);
+            }
+        }
+
 #if (MICROSOFT_INTERNAL && NETCOREAPP)
         /// <summary>
         /// This test to ensure that CredentialScanner detects the credentials when passed in environment variables and logs a warning in this case.
