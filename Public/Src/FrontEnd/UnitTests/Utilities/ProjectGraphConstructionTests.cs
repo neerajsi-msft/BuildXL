@@ -3,6 +3,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using BuildXL.FrontEnd.Sdk.ProjectGraph;
 using BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver;
 using BuildXL.Pips;
@@ -17,7 +19,8 @@ namespace Test.BuildXL.FrontEnd.Utilities
         {
             public IReadOnlyCollection<Project> Dependencies { get; set; } = Array.Empty<Project>();
             public bool Scheduled { get; set; } = true;
-            public bool CanBeScheduled() => Scheduled;
+            public Func<bool> Eligibility { get; set; }
+            public bool CanBeScheduled() => Eligibility?.Invoke() ?? Scheduled;
         }
 
         private sealed class Constructor : IProjectToGraphConstructor<Project>
@@ -103,6 +106,67 @@ namespace Test.BuildXL.FrontEnd.Utilities
             Assert.False(result.Succeeded);
             Assert.Same(failure, result.Failure);
             Assert.Equal(1, calls);
+        }
+
+        [Fact]
+        public async Task ThrownConstructionStopsQueuedIndependentProjectsAndPreservesTheException()
+        {
+            var failed = new Project();
+            var dependent = new Project { Dependencies = new[] { failed } };
+            var firstIndependent = new Project();
+            var secondIndependent = new Project();
+            var original = new InvalidOperationException("Unexpected construction failure.");
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            int otherCalls = 0;
+            var constructor = new Constructor
+            {
+                Schedule = (project, _) =>
+                {
+                    if (ReferenceEquals(project, failed))
+                    {
+                        entered.Set();
+                        Assert.True(release.Wait(TimeSpan.FromSeconds(30)));
+                        throw original;
+                    }
+                    Interlocked.Increment(ref otherCalls);
+                    return EmptyOutputs();
+                },
+            };
+            var run = new ProjectGraphToGraphConstructor<Project>(constructor, maxConcurrency: 1)
+                .TryScheduleAsync(new HashSet<Project> { dependent, firstIndependent, secondIndependent }, EmptyQualifier());
+            try
+            {
+                Assert.True(entered.Wait(TimeSpan.FromSeconds(30)));
+            }
+            finally
+            {
+                release.Set();
+            }
+            var actual = await Assert.ThrowsAsync<InvalidOperationException>(async () => await run);
+            Assert.Same(original, actual);
+            Assert.Equal(0, otherCalls);
+        }
+
+        [Fact]
+        public async Task ThrownEligibilityStopsIndependentProjectsBeforeConstruction()
+        {
+            var original = new InvalidOperationException("Unexpected eligibility failure.");
+            var failed = new Project { Eligibility = () => throw original };
+            int calls = 0;
+            var constructor = new Constructor
+            {
+                Schedule = (_, _) =>
+                {
+                    Interlocked.Increment(ref calls);
+                    return EmptyOutputs();
+                },
+            };
+            var actual = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await new ProjectGraphToGraphConstructor<Project>(constructor, maxConcurrency: 2)
+                    .TryScheduleAsync(new HashSet<Project> { failed, new Project(), new Project() }, EmptyQualifier()));
+            Assert.Same(original, actual);
+            Assert.Equal(0, calls);
         }
 
         [Fact]

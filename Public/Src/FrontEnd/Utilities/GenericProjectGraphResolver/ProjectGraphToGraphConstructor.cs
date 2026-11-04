@@ -68,51 +68,71 @@ namespace BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver
             using var slots = new SemaphoreSlim(m_maxConcurrency);
             Failure failure = null;
 
+            void StopAfterException() =>
+                Interlocked.CompareExchange(ref failure, new Failure<string>("Project construction aborted after an exception."), null);
+
             async Task ConstructAsync(TProject project, Task[] dependencies)
             {
-                await Task.WhenAll(dependencies).ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!project.CanBeScheduled() || Volatile.Read(ref failure) != null)
-                {
-                    return;
-                }
-                await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    if (Volatile.Read(ref failure) != null)
+                    await Task.WhenAll(dependencies).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (Volatile.Read(ref failure) != null || !project.CanBeScheduled())
                     {
                         return;
                     }
-                    await Task.Run(() =>
+                    await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
                         if (Volatile.Read(ref failure) != null)
                         {
                             return;
                         }
-                        var visible = new Dictionary<TProject, ProjectGraphOutputs>();
-                        foreach (var dependency in project.Dependencies)
+                        await Task.Run(() =>
                         {
-                            if (outputs.TryGetValue(dependency, out var dependencyOutputs))
+                            try
                             {
-                                visible[dependency] = dependencyOutputs;
+                                cancellationToken.ThrowIfCancellationRequested();
+                                if (Volatile.Read(ref failure) != null)
+                                {
+                                    return;
+                                }
+                                var visible = new Dictionary<TProject, ProjectGraphOutputs>();
+                                foreach (var dependency in project.Dependencies)
+                                {
+                                    if (outputs.TryGetValue(dependency, out var dependencyOutputs))
+                                    {
+                                        visible[dependency] = dependencyOutputs;
+                                    }
+                                }
+                                var result = m_constructor.TryScheduleProject(
+                                    project, new ReadOnlyDictionary<TProject, ProjectGraphOutputs>(visible), qualifierId);
+                                if (!result.Succeeded)
+                                {
+                                    Interlocked.CompareExchange(ref failure, result.Failure, null);
+                                }
+                                else
+                                {
+                                    outputs.TryAdd(project, result.Result);
+                                }
                             }
-                        }
-                        var result = m_constructor.TryScheduleProject(
-                            project, new ReadOnlyDictionary<TProject, ProjectGraphOutputs>(visible), qualifierId);
-                        if (!result.Succeeded)
-                        {
-                            Interlocked.CompareExchange(ref failure, result.Failure, null);
-                        }
-                        else
-                        {
-                            outputs.TryAdd(project, result.Result);
-                        }
-                    }, cancellationToken).ConfigureAwait(false);
+                            catch
+                            {
+                                // Stop admission on this worker before another worker can acquire a released slot.
+                                StopAfterException();
+                                throw;
+                            }
+                        }, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        slots.Release();
+                    }
                 }
-                finally
+                catch
                 {
-                    slots.Release();
+                    StopAfterException();
+                    throw;
                 }
             }
 
