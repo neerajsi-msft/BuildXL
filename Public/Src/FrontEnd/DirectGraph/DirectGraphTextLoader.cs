@@ -238,8 +238,11 @@ namespace BuildXL.FrontEnd.DirectGraph
                     {
                         string absolute = Absolute(project, path);
                         var reference = ResolveFile(project, absolute, null);
+                        if (!members.TryAdd(absolute, Binding(project, absolute, reference)))
+                        {
+                            throw new InvalidDataException($"Duplicate seal content '{absolute}'.");
+                        }
                         seal.Contents.Add(reference);
-                        members.Add(absolute, Binding(project, absolute, reference));
                     }
                     foreach (var values in fields.Rows("outputDirectory"))
                     {

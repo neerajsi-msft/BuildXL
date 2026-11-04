@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using BuildXL.Engine.DirectGraph;
@@ -172,6 +173,17 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Equal(expected, first.Fields["option"][0][0]);
             Assert.Equal(expected, records.Current.Fields["argument"][0][0]);
             Assert.False(records.MoveNext());
+        }
+
+        [Fact]
+        public void ReaderReportsFragmentWhenUtf8DecodingFails()
+        {
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes("directgraph 2\nstring 0 \"").Concat(new byte[] { 0xff }).ToArray());
+            using var reader = new StreamReader(stream, new UTF8Encoding(false, true));
+            var error = Assert.Throws<InvalidDataException>(() => new DirectGraphTextReader(reader, "invalid.dg").Read().ToArray());
+            Assert.Contains("invalid.dg", error.Message);
+            Assert.Contains("Invalid UTF-8", error.Message);
+            Assert.IsType<DecoderFallbackException>(error.InnerException);
         }
 
         [Theory]
@@ -886,6 +898,31 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { ignored, selected }, new[] { "selected" }));
             Assert.Contains("overlaps generated outputs", error.Message);
             Assert.Equal(new[] { Absolute("selected.dg") }, m_opened);
+        }
+
+        [Theory]
+        [InlineData("out/a")]
+        [InlineData("out/./a")]
+        public async Task DuplicateSealMembersReportRecordContext(string second)
+        {
+            var project = Project("duplicate", $$"""
+                directgraph 2
+                path 0 "out/a"
+                path 1 "out"
+                path 2 "{{second}}"
+                string 0 "content"
+                writeFile first
+                  destination $p0
+                  content $s0
+                sealDirectory headers
+                  directoryRoot $p1
+                  content $p0
+                  content $p2
+                """);
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
+            Assert.Contains("duplicate.dg:9", error.Message);
+            Assert.Contains("duplicate/headers", error.Message);
+            Assert.Contains("Duplicate seal content", error.Message);
         }
 
         private DirectGraphProjectSettings Project(string name, string text, params string[] dependencies)

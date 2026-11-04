@@ -35,7 +35,7 @@ namespace BuildXL.FrontEnd.DirectGraph
             bool header = false;
             DirectGraphTextRecord current = null;
             string line;
-            while ((line = m_reader.ReadLine()) != null)
+            while ((line = ReadLine()) != null)
             {
                 m_line++;
                 if (string.IsNullOrWhiteSpace(line) || line.AsSpan().TrimStart().StartsWith("#", StringComparison.Ordinal))
@@ -252,6 +252,18 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
             index += 4;
             return (char)code;
+        }
+
+        private string ReadLine()
+        {
+            try
+            {
+                return m_reader.ReadLine();
+            }
+            catch (DecoderFallbackException exception)
+            {
+                throw new InvalidDataException($"{m_file}: Invalid UTF-8 in DirectGraph fragment.", exception);
+            }
         }
 
         private InvalidDataException Error(string message) => new($"{m_file}:{m_line}: {message}");
