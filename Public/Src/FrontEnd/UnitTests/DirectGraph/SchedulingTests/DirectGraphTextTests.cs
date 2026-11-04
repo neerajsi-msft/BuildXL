@@ -541,7 +541,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Fact]
-        public async Task SourceProvidersAuthorizeOnlyTheirVisibleScopeAndOrderOnlySourcesAreProbed()
+        public async Task ExplicitSourceFilesDoNotImplicitlyImportSourceDirectoryGrants()
         {
             var sources = Project("sources", """
                 directgraph 2
@@ -572,29 +572,34 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             var process = m_operations.Single(operation => operation.AddProcess != null).AddProcess;
             Assert.Empty(process.InputFiles);
             Assert.Empty(process.OrderOnlyInputs);
-            Assert.Single(process.InputDirectories);
+            Assert.Empty(process.InputDirectories);
+            Assert.Empty(Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<Process>()).DirectoryDependencies);
         }
 
         [Theory]
         [InlineData("src/sub/input.h")]
         [InlineData("src/input.c")]
         [InlineData("other/input.h")]
-        public async Task UnresolvedInputsRequireMatchingSourceAuthorization(string path)
+        [InlineData("src/.git/HEAD")]
+        public async Task ExplicitSourcesDoNotRequireMatchingSourceAuthorization(string path)
         {
             var sources = Project("sources", """
                 directgraph 2
                 path 0 "src"
                 string 0 "*.h"
+                string 1 ".git"
                 sealDirectory source
                   directoryRoot $p0
                   sealKind sourceTopDirectoryOnly
                   pattern $s0
+                  sourceExclusion $s1
                 export public
                   directory $p0
                 """);
             var consumer = Project("consumer", "directgraph 2\npath 0 \"" + path + "\"\npath 1 \"out/b\"\ncopyFile c\n  source $p0\n  destination $p1", "sources");
-            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { consumer, sources }));
-            Assert.Contains("explicit source seal", error.Message);
+            await Load(new[] { consumer, sources });
+            var copy = Assert.Single(m_operations.Where(operation => operation.AddCopyFile != null)).AddCopyFile;
+            Assert.Equal(FileArtifactReference.ReferenceOneofCase.SourcePath, copy.Source.ReferenceCase);
         }
 
         [Theory]
@@ -637,7 +642,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         [Theory]
         [InlineData("writeFile w\n  destination $p0\n  content $s0\n  typo \"x\"")]
         [InlineData("writeFile w\n  destination $p0\n  destination $p1\n  content $s0")]
-        [InlineData("copyFile c\n  source $p1\n  destination $p0")]
+        [InlineData("copyFile c\n  source $p1\n  destination $p0\n  typo x")]
         [InlineData("writeFile w\n  destination $p0\n  content $s0\nwriteFile w\n  destination $p1\n  content $s0")]
         public async Task SemanticErrorsHaveFragmentAndOperationContext(string body)
         {
@@ -977,6 +982,59 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             var project = Project("p", "directgraph 2\npath 0 \"tool\"\npath 1 \".\"\npath 2 \"out\"\nstring 0 \"mutex\"\nwriteFile tool\n  destination $p0\n  content $s0\nprocess run\n  executable $p0\n  workingDirectory $p1\n  output $p2\n  " + fields);
             var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
             Assert.Contains("p/run", error.Message);
+        }
+
+        [Fact]
+        public async Task SourceExclusionsReachNativeSealWithoutGatingExplicitFiles()
+        {
+            var project = Project("p", """
+                directgraph 2
+                path 0 "src"
+                path 1 "src/.git/HEAD"
+                path 2 "."
+                path 3 "out/result"
+                string 0 ".git"
+                string 1 "nested/private"
+                sealDirectory source
+                  directoryRoot $p0
+                  sealKind sourceAllDirectories
+                  sourceExclusion $s0
+                  sourceExclusion $s1
+                process read
+                  executable $p1
+                  workingDirectory $p2
+                  input $p1
+                  output $p3
+                """);
+            await Load(new[] { project });
+            var seal = Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<SealDirectory>());
+            Assert.Equal(new[] { ".git", "nested/private" },
+                seal.SourceExclusions.Paths.Select(path => path.ToString(m_paths.StringTable)));
+            Assert.True(seal.SourceExclusions.Contains(m_paths, seal.DirectoryRoot, Absolute("src/.git/HEAD")));
+            Assert.False(seal.SourceExclusions.Contains(m_paths, seal.DirectoryRoot, Absolute("src/nested/.git/HEAD")));
+            var process = Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<Process>());
+            Assert.Empty(process.DirectoryDependencies);
+            Assert.Contains(FileArtifact.CreateSourceFile(Absolute("src/.git/HEAD")), process.Dependencies);
+        }
+
+        [Theory]
+        [InlineData("partial", ".git")]
+        [InlineData("sourceAllDirectories", "")]
+        [InlineData("sourceAllDirectories", "../outside")]
+        public async Task InvalidSourceExclusionsAreRejected(string kind, string exclusion)
+        {
+            var project = Project("p", $"directgraph 2\npath 0 \"src\"\nstring 0 \"{exclusion}\"\nsealDirectory s\n  directoryRoot $p0\n  sealKind {kind}\n  sourceExclusion $s0");
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
+            Assert.Contains("p/s", error.Message);
+            Assert.Contains("exclusion", error.Message);
+        }
+
+        [Fact]
+        public async Task ExplicitSourcesWorkWithoutAnySourceSeal()
+        {
+            var project = Project("p", "directgraph 2\npath 0 \"source\"\npath 1 \"out\"\ncopyFile copy\n  source $p0\n  destination $p1");
+            await Load(new[] { project });
+            Assert.True(Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<CopyFile>()).Source.IsSourceFile);
         }
 
         private DirectGraphProjectSettings Project(string name, string text, params string[] dependencies)

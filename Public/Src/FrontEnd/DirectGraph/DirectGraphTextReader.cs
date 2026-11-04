@@ -146,7 +146,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                 "output" or "rewrite" or "file" or "directoryRoot" or "tempDirectory" => 'p',
             "inputDirectory" or "outputDirectory" or "directory" => index == 0 ? 'p' : '\0',
             "content" => operation == "sealDirectory" ? 'p' : 's',
-            "argument" or "environment" or "passthroughEnvironment" or "description" or "pattern" => 's',
+            "argument" or "environment" or "passthroughEnvironment" or "description" or "pattern" or "sourceExclusion" => 's',
             "semaphore" => index == 0 ? 's' : '\0',
             _ => '\0',
         };

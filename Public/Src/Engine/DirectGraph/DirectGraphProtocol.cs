@@ -17,6 +17,6 @@ namespace BuildXL.Engine.DirectGraph
         /// field this receiver does not know would otherwise have it dropped silently and build a subtly different
         /// graph. The receiver requires an exact match, so emitters and BuildXL move together.
         /// </remarks>
-        public const uint Version = 3;
+        public const uint Version = 4;
     }
 }

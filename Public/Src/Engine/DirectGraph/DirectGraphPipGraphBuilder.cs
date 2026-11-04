@@ -611,6 +611,20 @@ namespace BuildXL.Engine.DirectGraph
 
             var directoryRoot = RequiredPath(request.HasDirectoryRoot, request.DirectoryRoot, "directory_root");
 
+            var exclusions = new RelativePath[request.SourceExclusions.Count];
+            if (exclusions.Length > 0 && request.Kind is not (SealDirectoryKind.SourceAllDirectories or SealDirectoryKind.SourceTopDirectoryOnly))
+            {
+                throw new InvalidRequestException("source_exclusions are only allowed for source seals.");
+            }
+            for (int i = 0; i < exclusions.Length; i++)
+            {
+                string value = StringValue(ResolveString(request.SourceExclusions[i], "source_exclusions"));
+                if (!RelativePath.TryCreate(m_pathTable.StringTable, value, out exclusions[i]) || exclusions[i].IsEmpty)
+                {
+                    throw new InvalidRequestException($"Invalid nonempty root-relative source exclusion '{value}'.");
+                }
+            }
+
             var contents = new FileArtifact[request.Contents.Count];
             for (int i = 0; i < contents.Length; i++)
             {
@@ -637,7 +651,8 @@ namespace BuildXL.Engine.DirectGraph
                     ResolveStrings(request.Patterns, "patterns"),
                     out var sealedDirectory,
                     out var sealDirectoryPip,
-                    request.Scrub))
+                    request.Scrub,
+                    new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(exclusions))))
             {
                 return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the seal-directory pip.");
             }

@@ -11,7 +11,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using BuildXL.Engine.DirectGraph;
 using BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver;
-using BuildXL.Native.IO;
 using BuildXL.Pips;
 using BuildXL.Pips.Operations;
 using BuildXL.Utilities.Collections;
@@ -250,6 +249,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                         seal.OutputDirectoryContents.Add(DirectoryReference(ResolveDirectory(project, values)));
                     }
                     seal.Patterns.Add(fields.Values("pattern").Select(m_values.String));
+                    seal.SourceExclusions.Add(fields.Values("sourceExclusion").Select(m_values.String));
                     Description(fields, value => seal.Description = value);
                     bool sourceSeal = seal.Kind is SealDirectoryKind.SourceAllDirectories or SealDirectoryKind.SourceTopDirectoryOnly;
                     if (sourceSeal)
@@ -265,7 +265,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                         }
                     }
                     AddDirectory(project, new DirectoryBinding(project, record.Name, root, id, false, sourceSeal,
-                        seal.Kind == SealDirectoryKind.SourceTopDirectoryOnly, fields.TakenPatterns, members,
+                        members: members,
                         kind: seal.Kind switch
                         {
                             SealDirectoryKind.Partial => GraphSealDirectoryKind.Partial,
@@ -552,18 +552,6 @@ namespace BuildXL.FrontEnd.DirectGraph
             {
                 throw new InvalidDataException($"Generated input '{path}' is not exported by a declared dependency.");
             }
-            var source = visible.Where(directory => directory.AllowsSource(path)).ToArray();
-            if (source.Length == 0)
-            {
-                throw new InvalidDataException($"Unresolved input '{path}': no visible output or explicit source seal authorizes it.");
-            }
-            if (process != null)
-            {
-                foreach (var directory in source)
-                {
-                    AddInputDirectory(process, directory);
-                }
-            }
             return new FileArtifactReference { SourcePath = m_values.Path(path) };
         }
 
@@ -782,17 +770,12 @@ namespace BuildXL.FrontEnd.DirectGraph
         private sealed class Fields
         {
             private readonly DirectGraphTextRecord m_record;
-            public string[] TakenPatterns { get; private set; } = Array.Empty<string>();
             public Fields(DirectGraphTextRecord record) => m_record = record;
             public IReadOnlyList<string[]> Rows(string name) =>
                 m_record.Fields.Remove(name, out var rows) ? rows : Array.Empty<string[]>();
             public IEnumerable<string> Values(string name)
             {
                 var rows = Rows(name);
-                if (name == "pattern")
-                {
-                    TakenPatterns = rows.SelectMany(row => row).ToArray();
-                }
                 if (name is not ("input" or "orderOnly"))
                 {
                     foreach (var row in rows)
@@ -859,11 +842,9 @@ namespace BuildXL.FrontEnd.DirectGraph
             public HashSet<(Project Owner, ulong Id)> ProducerIds { get; }
             public DirectoryArtifact Artifact { get; set; }
             public GraphSealDirectoryKind Kind { get; }
-            private readonly bool m_topOnly;
-            private readonly string[] m_patterns;
             public Dictionary<string, FileBinding> Members { get; }
             public DirectoryBinding(Project owner, string symbol, string path, ulong id, bool dynamic,
-                bool source = false, bool topOnly = false, string[] patterns = null, Dictionary<string, FileBinding> members = null,
+                bool source = false, Dictionary<string, FileBinding> members = null,
                 HashSet<(Project Owner, ulong Id)> producers = null, GraphSealDirectoryKind? kind = null)
             {
                 Owner = owner;
@@ -874,14 +855,8 @@ namespace BuildXL.FrontEnd.DirectGraph
                 Source = source;
                 ProducerIds = producers ?? new HashSet<(Project Owner, ulong Id)> { (owner, id) };
                 Kind = kind ?? (dynamic ? GraphSealDirectoryKind.SharedOpaque : GraphSealDirectoryKind.Partial);
-                m_topOnly = topOnly;
-                m_patterns = patterns ?? Array.Empty<string>();
                 Members = members ?? new Dictionary<string, FileBinding>(s_paths);
             }
-            public bool AllowsSource(string path) => Source && Within(path, Path) && !s_paths.Equals(path, Path) &&
-                (!m_topOnly || s_paths.Equals(System.IO.Path.GetDirectoryName(path), Path)) &&
-                (m_patterns.Length == 0 || m_patterns.Any(pattern =>
-                    FileUtilities.PathMatchPattern(System.IO.Path.GetFileName(path), pattern)));
         }
     }
 }

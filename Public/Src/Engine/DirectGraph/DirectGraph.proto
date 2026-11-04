@@ -364,6 +364,8 @@ message AddSealDirectoryRequest {
     repeated uint32 tags = 8;  // string ids
     optional uint32 description = 9;  // string id; may be omitted
     bool scrub = 10;
+    // Literal nonempty root-relative files/subtrees, only for source seals. String ids.
+    repeated uint32 source_exclusions = 11;
 }
 
 enum ContentFilterKind {
