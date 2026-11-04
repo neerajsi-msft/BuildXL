@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.ContractsLight;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using BuildXL.Engine.DirectGraph.Tracing;
@@ -13,1228 +12,425 @@ using BuildXL.Pips;
 using BuildXL.Pips.Builders;
 using BuildXL.Pips.Graph;
 using BuildXL.Pips.Operations;
-using BuildXL.Utilities.Collections;
 using BuildXL.Utilities.Configuration;
 using BuildXL.Utilities.Core;
 using BuildXL.Utilities.Instrumentation.Common;
+using InvalidRequestException = BuildXL.Engine.DirectGraph.DirectGraphInvalidRequestException;
+using NativeSealKind = BuildXL.Pips.Operations.SealDirectoryKind;
 
 namespace BuildXL.Engine.DirectGraph
 {
-    /// <summary>
-    /// Resolves the <see cref="PipConstructionHelper"/> that owns pips for a given module and target symbol.
-    /// </summary>
-    /// <remarks>
-    /// Returns false and populates <paramref name="error"/> when the module is not owned by the resolver, or the
-    /// symbol cannot be used to construct pip provenance.
-    /// </remarks>
-    public delegate bool PipConstructionHelperResolver(string moduleName, string symbol, out PipConstructionHelper pipConstructionHelper, out string error);
-
-    /// <summary>
-    /// Publishes an artifact at its own path in a module, or returns false with the reason it cannot be exported.
-    /// </summary>
+    public delegate bool PipConstructionHelperResolver(string moduleName, string symbol, out PipConstructionHelper helper, out string error);
     public delegate bool TryRegisterExport(string moduleName, FileOrDirectoryArtifact artifact, out string error);
 
     /// <summary>
-    /// Translates DirectGraph protocol operations into BuildXL pip construction calls.
+    /// Ordered protobuf stream adapter. Protocol IDs and sticky rejection belong here, not in native construction.
     /// </summary>
-    /// <remarks>
-    /// Serves one stream: the interned values and the operation ids it records are that stream's, so another stream
-    /// needs its own instance. Not thread safe: the server hands it one operation at a time, in stream order.
-    /// </remarks>
     public sealed class DirectGraphPipGraphBuilder : IDirectGraphGraphBuilder
     {
-        private const string DefaultToolDescription = "DirectGraph process";
-
         private readonly PathTable m_pathTable;
-        private readonly IMutablePipGraph m_pipGraph;
-
-        // Supplies the defaults a DScript process would get from the build's configuration.
-        private readonly ISandboxConfiguration m_sandboxConfiguration;
-        private readonly Func<ProcessBuilder> m_processBuilderFactory;
-        private readonly PipConstructionHelperResolver m_pipConstructionHelperResolver;
-        private readonly TryRegisterExport m_registerExport;
         private readonly LoggingContext m_loggingContext;
         private readonly bool m_traceOperation;
         private readonly CounterCollection<DirectGraphCounter> m_counters;
-        private (ulong OperationId, string Error)? m_firstRejection;
-        private bool m_complete;
-
-        // One ordered stream owns each builder, including its values, operation IDs and producer maps.
-        // Parallel text projects use separate builders; only thread-safe counters and native graph APIs are shared.
-        // The values the emitter registered, indexed by id in the order it registered them.
         private readonly List<AbsolutePath> m_paths = new();
         private readonly List<StringId> m_strings = new();
+        private readonly Dictionary<ulong, DirectGraphConstructionResult> m_producedArtifacts = new();
+        private (ulong OperationId, string Error)? m_firstRejection;
+        private bool m_complete;
+        public DirectGraphPipConstructor PipConstructor { get; }
 
-        // What each operation that has succeeded produced, by the emitter's operation id. A later operation names an
-        // output by its producer and path, and is resolved from here rather than from the graph, whose lookup by path
-        // returns only the latest artifact of the path. A directory's seal id is known only here as well: BuildXL
-        // assigns it when it constructs the producer.
-        private readonly Dictionary<ulong, ProducedArtifacts> m_producedArtifacts = new();
-
-        /// <nodoc />
-        public DirectGraphPipGraphBuilder(
-            PathTable pathTable,
-            IMutablePipGraph pipGraph,
-            ISandboxConfiguration sandboxConfiguration,
-            Func<ProcessBuilder> processBuilderFactory,
-            PipConstructionHelperResolver pipConstructionHelperResolver,
-            TryRegisterExport registerExport,
-            LoggingContext loggingContext,
-            bool traceOperation,
-            CounterCollection<DirectGraphCounter> counters = null)
+        public DirectGraphPipGraphBuilder(PathTable pathTable, IMutablePipGraph pipGraph,
+            ISandboxConfiguration sandboxConfiguration, Func<ProcessBuilder> processBuilderFactory,
+            PipConstructionHelperResolver pipConstructionHelperResolver, TryRegisterExport registerExport,
+            LoggingContext loggingContext, bool traceOperation, CounterCollection<DirectGraphCounter> counters = null)
         {
-            Contract.Requires(pathTable != null);
-            Contract.Requires(pipGraph != null);
-            Contract.Requires(sandboxConfiguration != null);
-            Contract.Requires(processBuilderFactory != null);
-            Contract.Requires(pipConstructionHelperResolver != null);
-            Contract.Requires(registerExport != null);
+            Contract.Requires(pathTable != null && pipGraph != null && sandboxConfiguration != null);
+            Contract.Requires(processBuilderFactory != null && pipConstructionHelperResolver != null && registerExport != null);
             Contract.Requires(loggingContext != null);
-
             m_pathTable = pathTable;
-            m_pipGraph = pipGraph;
-            m_sandboxConfiguration = sandboxConfiguration;
-            m_processBuilderFactory = processBuilderFactory;
-            m_pipConstructionHelperResolver = pipConstructionHelperResolver;
-            m_registerExport = registerExport;
             m_loggingContext = loggingContext;
             m_traceOperation = traceOperation;
             m_counters = counters ?? new CounterCollection<DirectGraphCounter>();
+            PipConstructor = new(pathTable, pipGraph, sandboxConfiguration, processBuilderFactory,
+                pipConstructionHelperResolver, registerExport, m_counters);
         }
 
-        /// <summary>
-        /// The first operation this builder rejected, if any.
-        /// </summary>
-        /// <remarks>
-        /// A rejected operation means the graph is not the one the emitter asked for, so the build has to fail. The
-        /// builder cannot fail it directly - it runs on the server's stream loop while the resolver is blocked
-        /// awaiting the emitter process - and no later check would catch it either, since
-        /// <see cref="DirectGraphServer"/> ends the stream when Complete arrives whatever status Complete was
-        /// answered with. The resolver reads this once the tool is gone.
-        /// </remarks>
+        public bool IsComplete => Volatile.Read(ref m_complete);
+
         public bool TryGetFirstRejection(out ulong operationId, out string error)
         {
-            if (m_firstRejection == null)
-            {
-                operationId = 0;
-                error = null;
-                return false;
-            }
-
+            if (m_firstRejection == null) { operationId = 0; error = null; return false; }
             (operationId, error) = m_firstRejection.Value;
             return true;
         }
 
-        /// <summary>
-        /// Whether Complete has been handled: the emitter declared the graph finished.
-        /// </summary>
-        /// <remarks>
-        /// Set before Complete's response is written, so an emitter that exits as soon as it reads the response cannot
-        /// get ahead of it.
-        /// </remarks>
-        public bool IsComplete => Volatile.Read(ref m_complete);
-
-        /// <summary>
-        /// Binds host-provided dependency artifacts in this stream without constructing replacement producers.
-        /// Import IDs belong to the host, not the fragment or the wire protocol.
-        /// </summary>
-        public void RegisterImportedArtifacts(
-            ulong importId, FileArtifact[] files, DirectoryArtifact[] directories, PipId producer = default)
+        public void RegisterImportedArtifacts(ulong importId, FileArtifact[] files, DirectoryArtifact[] directories, PipId producer = default)
         {
-            Contract.Requires(importId != 0);
-            Contract.Requires(files != null && directories != null);
+            Contract.Requires(importId != 0 && files != null && directories != null);
             Contract.Requires(files.All(file => file.IsValid) && directories.All(directory => directory.IsValid));
             Contract.Requires(!m_complete && m_firstRejection == null);
-            var sortedFiles = files.ToArray();
-            Array.Sort(sortedFiles, OrdinalPathOnlyFileArtifactComparer.Instance);
-            m_producedArtifacts.Add(importId, new ProducedArtifacts(sortedFiles, directories.ToArray(), producer));
+            files = files.ToArray();
+            Array.Sort(files, OrdinalPathOnlyFileArtifactComparer.Instance);
+            m_producedArtifacts.Add(importId, new(files, directories.ToArray(), producer));
         }
 
-        /// <summary>Returns an actual file output, including its rewrite count and scheduling producer.</summary>
         public FileArtifact GetProducedFile(ulong operationId, AbsolutePath path, out PipId producer)
         {
-            var artifacts = Producer(operationId, "host file output");
-            producer = artifacts.PipId;
-            int index = Array.BinarySearch(artifacts.Files, FileArtifact.CreateSourceFile(path), OrdinalPathOnlyFileArtifactComparer.Instance);
-            if (index < 0)
-            {
-                throw new InvalidOperationException($"Operation {operationId} did not produce '{path.ToString(m_pathTable)}'.");
-            }
-            return artifacts.Files[index];
+            var result = Producer(operationId, "host file output");
+            producer = result.PipId;
+            return FindFile(result, path, operationId, "host file output");
         }
 
-        /// <summary>Returns an actual directory output, including its BuildXL-assigned seal identity.</summary>
-        public DirectoryArtifact GetProducedDirectory(ulong operationId, AbsolutePath path)
-        {
-            foreach (var directory in Producer(operationId, "host directory output").Directories)
-            {
-                if (directory.Path == path)
-                {
-                    return directory;
-                }
-            }
-            throw new InvalidOperationException($"Operation {operationId} did not produce directory '{path.ToString(m_pathTable)}'.");
-        }
+        public DirectoryArtifact GetProducedDirectory(ulong operationId, AbsolutePath path) =>
+            FindDirectory(Producer(operationId, "host directory output"), path, operationId, "host directory output");
 
-        /// <inheritdoc />
-        public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, CancellationToken cancellationToken)
-            => HandleOperationAsync(operation, PipData.Invalid, cancellationToken);
+        public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, CancellationToken cancellationToken) =>
+            HandleOperationAsync(operation, PipData.Invalid, cancellationToken);
 
-        /// <summary>
-        /// Handles an in-process text operation with optional structured process arguments or write-file content,
-        /// without extending the wire protocol.
-        /// </summary>
+        // Transitional text caller; removed when the text loader switches to native operations.
         public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, PipData data, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            if (m_traceOperation)
-            {
-                Logger.Log.GraphOperationReceived(m_loggingContext, operation.ToString());
-            }
-
+            if (m_traceOperation) Logger.Log.GraphOperationReceived(m_loggingContext, operation.ToString());
             GraphOperationResponse response;
-            if (TryGetOperationCounters(operation.OperationCase, out var countCounter, out var durationCounter))
+            if (TryGetOperationCounters(operation.OperationCase, out var count, out var duration))
             {
-                m_counters.IncrementCounter(countCounter);
-                using (m_counters.StartStopwatch(durationCounter))
-                {
-                    response = HandleOperation(operation, data);
-                }
+                m_counters.IncrementCounter(count);
+                using (m_counters.StartStopwatch(duration)) { response = HandleOperation(operation, data); }
             }
-            else
-            {
-                response = HandleOperation(operation, data);
-            }
-
-            WithProtocolVersion(response);
-
-            if (m_traceOperation)
-            {
-                Logger.Log.GraphOperationResponse(m_loggingContext, response.ToString());
-            }
-
+            else response = HandleOperation(operation, data);
+            response.ProtocolVersion = DirectGraphProtocol.Version;
+            if (m_traceOperation) Logger.Log.GraphOperationResponse(m_loggingContext, response.ToString());
             return Task.FromResult(response);
         }
 
-        private GraphOperationResponse HandleOperation(GraphOperation operation, PipData data) =>
-            // m_firstRejection is read before dispatching, because dispatching is what sets it.
-            m_firstRejection != null ? AlreadyFailed(operation.OperationId) :
-            operation.ProtocolVersion != DirectGraphProtocol.Version ? VersionMismatch(operation) :
-            Dispatch(operation, data);
-
-        private static bool TryGetOperationCounters(
-            GraphOperation.OperationOneofCase operationCase,
-            out DirectGraphCounter count,
-            out DirectGraphCounter duration)
+        private GraphOperationResponse HandleOperation(GraphOperation operation, PipData data)
         {
-            switch (operationCase)
+            if (m_firstRejection is { } rejected)
             {
-                case GraphOperation.OperationOneofCase.AddProcess:
-                    (count, duration) = (DirectGraphCounter.AddProcessCount, DirectGraphCounter.AddProcessDuration);
-                    return true;
-                case GraphOperation.OperationOneofCase.AddWriteFile:
-                    (count, duration) = (DirectGraphCounter.AddWriteFileCount, DirectGraphCounter.AddWriteFileDuration);
-                    return true;
-                case GraphOperation.OperationOneofCase.AddCopyFile:
-                    (count, duration) = (DirectGraphCounter.AddCopyFileCount, DirectGraphCounter.AddCopyFileDuration);
-                    return true;
-                case GraphOperation.OperationOneofCase.AddSealDirectory:
-                    (count, duration) = (DirectGraphCounter.AddSealDirectoryCount, DirectGraphCounter.AddSealDirectoryDuration);
-                    return true;
-                case GraphOperation.OperationOneofCase.AddCompositeSharedOpaqueDirectory:
-                    (count, duration) = (DirectGraphCounter.AddCompositeSharedOpaqueDirectoryCount, DirectGraphCounter.AddCompositeSharedOpaqueDirectoryDuration);
-                    return true;
-                case GraphOperation.OperationOneofCase.AddExport:
-                    (count, duration) = (DirectGraphCounter.AddExportCount, DirectGraphCounter.AddExportDuration);
-                    return true;
-                case GraphOperation.OperationOneofCase.Complete:
-                    (count, duration) = (DirectGraphCounter.CompleteCount, DirectGraphCounter.CompleteDuration);
-                    return true;
-                default:
-                    count = default;
-                    duration = default;
-                    return false;
+                return Failure(operation.OperationId, GraphOperationResponseStatus.PreviousOperationRejected,
+                    $"Graph construction already failed at operation {rejected.OperationId}, so this operation was not processed. That operation was rejected because: {rejected.Error}");
             }
-        }
-
-        private GraphOperationResponse Dispatch(GraphOperation operation, PipData data)
-        {
-            ulong operationId = operation.OperationId;
-
+            if (operation.ProtocolVersion != DirectGraphProtocol.Version)
+            {
+                return Failure(operation.OperationId, GraphOperationResponseStatus.VersionMismatch, operation.ProtocolVersion == 0
+                    ? $"The emitter did not set GraphOperation.protocol_version. This BuildXL speaks DirectGraph protocol version {DirectGraphProtocol.Version}."
+                    : $"The emitter speaks DirectGraph protocol version {operation.ProtocolVersion}. This BuildXL speaks version {DirectGraphProtocol.Version}.");
+            }
             try
             {
                 Accept(operation);
-
-                if (data.IsValid && !(operation.AddProcess != null
-                    ? operation.AddProcess.Arguments.Count == 0
-                    : operation.AddWriteFile != null && !operation.AddWriteFile.HasContent))
+                if (data.IsValid && !(operation.AddProcess != null ? operation.AddProcess.Arguments.Count == 0 :
+                    operation.AddWriteFile != null && !operation.AddWriteFile.HasContent))
                 {
                     throw new InvalidRequestException("Structured data requires a process with no wire-format arguments or a write-file operation with no wire-format content.");
                 }
-
-                return operation.OperationCase switch
+                if (operation.Complete != null)
                 {
-                    GraphOperation.OperationOneofCase.AddProcess => AddProcess(operationId, operation.AddProcess, data),
-                    GraphOperation.OperationOneofCase.AddWriteFile => AddWriteFile(operationId, operation.AddWriteFile, data),
-                    GraphOperation.OperationOneofCase.AddCopyFile => AddCopyFile(operationId, operation.AddCopyFile),
-                    GraphOperation.OperationOneofCase.AddSealDirectory => AddSealDirectory(operationId, operation.AddSealDirectory),
-                    GraphOperation.OperationOneofCase.AddCompositeSharedOpaqueDirectory => AddCompositeSharedOpaqueDirectory(operationId, operation.AddCompositeSharedOpaqueDirectory),
-                    GraphOperation.OperationOneofCase.AddExport => AddExport(operationId, operation.AddExport),
-                    GraphOperation.OperationOneofCase.Complete => Complete(operationId),
-                    _ => Failure(operationId, GraphOperationResponseStatus.InvalidRequest, "The graph operation is not specified."),
+                    Volatile.Write(ref m_complete, true);
+                    return Success(operation.OperationId);
+                }
+                var (module, symbol) = operation.OperationCase switch
+                {
+                    GraphOperation.OperationOneofCase.AddProcess => (operation.AddProcess.Module, operation.AddProcess.Symbol),
+                    GraphOperation.OperationOneofCase.AddWriteFile => (operation.AddWriteFile.Module, operation.AddWriteFile.Symbol),
+                    GraphOperation.OperationOneofCase.AddCopyFile => (operation.AddCopyFile.Module, operation.AddCopyFile.Symbol),
+                    GraphOperation.OperationOneofCase.AddSealDirectory => (operation.AddSealDirectory.Module, operation.AddSealDirectory.Symbol),
+                    GraphOperation.OperationOneofCase.AddCompositeSharedOpaqueDirectory => (operation.AddCompositeSharedOpaqueDirectory.Module, operation.AddCompositeSharedOpaqueDirectory.Symbol),
+                    GraphOperation.OperationOneofCase.AddExport => (operation.AddExport.Module, (string)null),
+                    _ => throw new InvalidRequestException("The graph operation is not specified."),
                 };
+                var helper = operation.AddExport == null ? PipConstructor.ResolveHelper(module, symbol) : null;
+                var native = Translate(operation, data);
+                native.Module = module;
+                native.Symbol = symbol;
+                var result = PipConstructor.Construct(native, helper, countOperation: false);
+                m_producedArtifacts.Add(operation.OperationId, result);
+                return Success(operation.OperationId, result.SemiStableHash);
             }
-            catch (InvalidRequestException e)
+            catch (InvalidRequestException exception) { return Failure(operation.OperationId, GraphOperationResponseStatus.InvalidRequest, exception.Message); }
+            catch (DirectGraphConstructionException exception) { return Failure(operation.OperationId, GraphOperationResponseStatus.GraphError, exception.Message); }
+            catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                return Failure(operationId, GraphOperationResponseStatus.InvalidRequest, e.Message);
-            }
-            catch (Exception e) when (e is not OperationCanceledException)
-            {
-                // Pip construction reports some invalid inputs by throwing. Nothing after a rejection is processed, so a
-                // partly constructed pip is never built on.
-                return Failure(operationId, GraphOperationResponseStatus.GraphError, $"BuildXL could not construct the pip: {e.GetType().Name}: {e.Message}");
+                return Failure(operation.OperationId, GraphOperationResponseStatus.GraphError,
+                    $"BuildXL could not construct the pip: {exception.GetType().Name}: {exception.Message}");
             }
         }
 
-        private GraphOperationResponse Complete(ulong operationId)
+        private DirectGraphOperation Translate(GraphOperation operation, PipData data)
         {
-            Volatile.Write(ref m_complete, true);
-            return Success(operationId);
+            switch (operation.OperationCase)
+            {
+                case GraphOperation.OperationOneofCase.AddProcess:
+                    return TranslateProcess(operation.AddProcess, data);
+                case GraphOperation.OperationOneofCase.AddWriteFile:
+                    var write = operation.AddWriteFile;
+                    var destination = RequiredPath(write.HasDestination, write.Destination, "destination");
+                    var content = new PipDataBuilder(m_pathTable.StringTable);
+                    if (!data.IsValid) content.Add(RequiredString(write.HasContent, write.Content, "content"));
+                    return Common(new DirectGraphWriteFile
+                    {
+                        Destination = destination,
+                        Content = data.IsValid ? data : content.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping),
+                    }, write.Tags, write.HasDescription, write.Description);
+                case GraphOperation.OperationOneofCase.AddCopyFile:
+                    var copy = operation.AddCopyFile;
+                    if (copy.Source == null) throw new InvalidRequestException("The copy-file operation does not specify a source.");
+                    return Common(new DirectGraphCopyFile
+                    {
+                        Source = ResolveFile(copy.Source, "source"),
+                        Destination = RequiredPath(copy.HasDestination, copy.Destination, "destination"),
+                        OutputsMustRemainWritable = copy.OutputsMustRemainWritable,
+                    }, copy.Tags, copy.HasDescription, copy.Description);
+                case GraphOperation.OperationOneofCase.AddSealDirectory:
+                    var seal = operation.AddSealDirectory;
+                    var nativeSeal = Common(new DirectGraphSealDirectory
+                    {
+                        DirectoryRoot = RequiredPath(seal.HasDirectoryRoot, seal.DirectoryRoot, "directory_root"),
+                        Kind = seal.Kind switch
+                        {
+                            SealDirectoryKind.Partial => NativeSealKind.Partial,
+                            SealDirectoryKind.Full => NativeSealKind.Full,
+                            SealDirectoryKind.SourceAllDirectories => NativeSealKind.SourceAllDirectories,
+                            SealDirectoryKind.SourceTopDirectoryOnly => NativeSealKind.SourceTopDirectoryOnly,
+                            _ => throw InvalidEnum((int)seal.Kind, "kind"),
+                        },
+                        Scrub = seal.Scrub,
+                    }, seal.Tags, seal.HasDescription, seal.Description);
+                    nativeSeal.Contents.AddRange(seal.Contents.Select(file => ResolveFile(file, "contents")));
+                    nativeSeal.OutputDirectoryContents.AddRange(seal.OutputDirectoryContents.Select(directory => ResolveDirectory(directory, "output_directory_contents")));
+                    nativeSeal.Patterns.AddRange(seal.Patterns.Select(id => ResolveString(id, "patterns")));
+                    nativeSeal.SourceExclusions.AddRange(seal.SourceExclusions.Select(id => ResolveString(id, "source_exclusions")));
+                    return nativeSeal;
+                case GraphOperation.OperationOneofCase.AddCompositeSharedOpaqueDirectory:
+                    var compose = operation.AddCompositeSharedOpaqueDirectory;
+                    var root = RequiredPath(compose.HasDirectoryRoot, compose.DirectoryRoot, "directory_root");
+                    var directories = compose.Contents.Select(directory => ResolveDirectory(directory, "contents")).ToArray();
+                    PipConstructor.ValidateCompositeDirectories(directories);
+                    if (compose.ContentFilter != null) DirectGraphPipConstructor.ValidateContentFilterRegex(compose.ContentFilter.Regex);
+                    var nativeCompose = Common(new DirectGraphCompositeDirectory
+                    {
+                        DirectoryRoot = root,
+                        Action = compose.Action switch
+                        {
+                            CompositionActionKind.WidenDirectoryCone => SealDirectoryCompositionActionKind.WidenDirectoryCone,
+                            CompositionActionKind.NarrowDirectoryCone => SealDirectoryCompositionActionKind.NarrowDirectoryCone,
+                            _ => throw InvalidEnum((int)compose.Action, "action"),
+                        },
+                        ContentFilter = compose.ContentFilter == null ? null : new SealDirectoryContentFilter(
+                            compose.ContentFilter.Kind switch
+                            {
+                                ContentFilterKind.Include => SealDirectoryContentFilter.ContentFilterKind.Include,
+                                ContentFilterKind.Exclude => SealDirectoryContentFilter.ContentFilterKind.Exclude,
+                                _ => throw InvalidEnum((int)compose.ContentFilter.Kind, "content_filter.kind"),
+                            }, compose.ContentFilter.Regex),
+                    }, compose.Tags, compose.HasDescription, compose.Description);
+                    nativeCompose.Contents.AddRange(directories);
+                    return nativeCompose;
+                case GraphOperation.OperationOneofCase.AddExport:
+                    var export = new DirectGraphExport();
+                    export.Files.AddRange(operation.AddExport.Files.Select(file => ResolveFile(file, "files")));
+                    export.Directories.AddRange(operation.AddExport.Directories.Select(directory => ResolveDirectory(directory, "directories")));
+                    return export;
+                default: throw new InvalidRequestException("The graph operation is not specified.");
+            }
         }
 
-        /// <summary>
-        /// Checks that the operation's id is new and registers the values it introduces, before anything in it is resolved.
-        /// </summary>
+        private DirectGraphProcess TranslateProcess(AddProcessRequest request, PipData data)
+        {
+            if (request.Executable == null) throw new InvalidRequestException("The process operation does not specify an executable.");
+            var native = Common(new DirectGraphProcess
+            {
+                Executable = ResolveFile(request.Executable, "executable"),
+                WorkingDirectory = RequiredPath(request.HasWorkingDirectory, request.WorkingDirectory, "working_directory"),
+                ToolDescription = OptionalString(request.HasToolDescription, request.ToolDescription, "tool_description"),
+                AbsentPathProbeMode = !request.HasAbsentPathProbeInUndeclaredOpaqueMode ? null : request.AbsentPathProbeInUndeclaredOpaqueMode switch
+                {
+                    AbsentPathProbeMode.Unsafe => Process.AbsentPathProbeInUndeclaredOpaquesMode.Unsafe,
+                    AbsentPathProbeMode.Strict => Process.AbsentPathProbeInUndeclaredOpaquesMode.Strict,
+                    AbsentPathProbeMode.Relaxed => Process.AbsentPathProbeInUndeclaredOpaquesMode.Relaxed,
+                    _ => throw InvalidEnum((int)request.AbsentPathProbeInUndeclaredOpaqueMode, "absent_path_probe_in_undeclared_opaque_mode"),
+                },
+                DoubleWritePolicy = !request.HasDoubleWritePolicy ? null : request.DoubleWritePolicy switch
+                {
+                    DoubleWritePolicy.DoubleWritesAreErrors => RewritePolicy.DoubleWritesAreErrors,
+                    DoubleWritePolicy.AllowSameContentDoubleWrites => RewritePolicy.AllowSameContentDoubleWrites,
+                    DoubleWritePolicy.UnsafeFirstDoubleWriteWins => RewritePolicy.UnsafeFirstDoubleWriteWins,
+                    _ => throw InvalidEnum((int)request.DoubleWritePolicy, "double_write_policy"),
+                },
+                SourceRewritePolicy = !request.HasSourceRewritePolicy ? null : request.SourceRewritePolicy switch
+                {
+                    SourceRewritePolicy.SourceRewritesAreErrors => RewritePolicy.SourceRewritesAreErrors,
+                    SourceRewritePolicy.SafeSourceRewritesAreAllowed => RewritePolicy.SafeSourceRewritesAreAllowed,
+                    _ => throw InvalidEnum((int)request.SourceRewritePolicy, "source_rewrite_policy"),
+                },
+                Timeout = request.TimeoutMillis > 0 ? TimeSpan.FromMilliseconds(request.TimeoutMillis) : null,
+                WarningTimeout = request.WarningTimeoutMillis > 0 ? TimeSpan.FromMilliseconds(request.WarningTimeoutMillis) : null,
+                Weight = request.Weight, Priority = request.Priority, ProcessRetries = request.ProcessRetries,
+                WarningRegex = OptionalString(request.HasWarningRegex, request.WarningRegex, "warning_regex"),
+                ErrorRegex = OptionalString(request.HasErrorRegex, request.ErrorRegex, "error_regex"),
+                EnableMultiLineErrorScanning = request.EnableMultiLineErrorScanning,
+                StandardOutput = OptionalPath(request.HasStandardOutput, request.StandardOutput, "standard_output"),
+                StandardError = OptionalPath(request.HasStandardError, request.StandardError, "standard_error"),
+                TraceFile = OptionalPath(request.HasTraceFile, request.TraceFile, "trace_file"),
+                TempDirectory = OptionalPath(request.HasTempDirectory, request.TempDirectory, "temp_directory"),
+                EnableTempDirectory = request.EnableTempDirectory,
+                RetryAttemptEnvironmentVariable = OptionalString(request.HasRetryAttemptEnvironmentVariable, request.RetryAttemptEnvironmentVariable, "retry_attempt_environment_variable"),
+            }, request.Tags, request.HasDescription, request.Description);
+            var arguments = new PipDataBuilder(m_pathTable.StringTable);
+            if (data.IsValid) arguments.Add(data);
+            else foreach (var id in request.Arguments) arguments.Add(ResolveString(id, "arguments"));
+            native.Arguments = arguments.ToPipData(" ", PipDataFragmentEscaping.CRuntimeArgumentRules);
+            if (request.Options != null)
+            {
+                foreach (var field in ProcessOptions.Descriptor.Fields.InDeclarationOrder())
+                {
+                    if ((bool)field.Accessor.GetValue(request.Options)) DirectGraphPipConstructor.SetProcessOption(native, field.JsonName);
+                }
+            }
+            native.InputFiles.AddRange(request.InputFiles.Select(file => ResolveFile(file, "input_files")));
+            native.InputDirectories.AddRange(request.InputDirectories.Select(directory => ResolveDirectory(directory, "input_directories")));
+            foreach (var output in request.OutputFiles)
+            {
+                var existence = output.Existence switch
+                {
+                    FileExistenceKind.Required => FileExistence.Required,
+                    FileExistenceKind.Temporary => FileExistence.Temporary,
+                    FileExistenceKind.Optional => FileExistence.Optional,
+                    _ => throw InvalidEnum((int)output.Existence, "output_files.existence"),
+                };
+                native.OutputFiles.Add(output.TargetCase switch
+                {
+                    OutputFile.TargetOneofCase.Path => new(ResolvePath(output.Path, "output_files"), existence),
+                    OutputFile.TargetOneofCase.Rewrites => new(default, existence, ResolveProducedFile(output.Rewrites, "output_files")),
+                    _ => throw new InvalidRequestException("'output_files' has an entry that sets neither 'path' nor 'rewrites'."),
+                });
+            }
+            native.OutputDirectories.AddRange(request.OutputDirectories.Select(directory => new DirectGraphDirectoryOutput(
+                RequiredPath(directory.HasPath, directory.Path, "output_directories"), directory.Kind switch
+                {
+                    OutputDirectoryKind.Shared => NativeSealKind.SharedOpaque,
+                    OutputDirectoryKind.Exclusive => NativeSealKind.Opaque,
+                    _ => throw InvalidEnum((int)directory.Kind, "output_directories.kind"),
+                })));
+            native.EnvironmentVariables.AddRange(request.EnvironmentVariables.Select(variable => new DirectGraphEnvironmentVariable(
+                RequiredString(variable.HasName, variable.Name, "environment_variables.name"),
+                variable.IsPassThrough ? default : RequiredString(variable.HasValue, variable.Value, "environment_variables.value"), variable.IsPassThrough)));
+            native.Semaphores.AddRange(request.Semaphores.Select(semaphore => new DirectGraphSemaphore(
+                RequiredString(semaphore.HasName, semaphore.Name, "semaphores.name"), semaphore.Limit, semaphore.IncrementBy)));
+            native.UntrackedPaths.AddRange(request.UntrackedPaths.Select(id => ResolvePath(id, "untracked_paths")));
+            native.UntrackedScopes.AddRange(request.UntrackedScopes.Select(id => ResolvePath(id, "untracked_scopes")));
+            native.OutputDirectoryExclusions.AddRange(request.OutputDirectoryExclusions.Select(id => ResolvePath(id, "output_directory_exclusions")));
+            native.AdditionalTempDirectories.AddRange(request.AdditionalTempDirectories.Select(id => ResolvePath(id, "additional_temp_directories")));
+            native.AllowedUndeclaredSourceReadScopes.AddRange(request.AllowedUndeclaredSourceReadScopes.Select(id => ResolvePath(id, "allowed_undeclared_source_read_scopes")));
+            native.AllowedUndeclaredSourceReadPaths.AddRange(request.AllowedUndeclaredSourceReadPaths.Select(id => ResolvePath(id, "allowed_undeclared_source_read_paths")));
+            native.AllowedSurvivingChildProcessNames.AddRange(request.AllowedSurvivingChildProcessNames.Select(id => ResolveString(id, "allowed_surviving_child_process_names")));
+            native.BreakawayChildProcesses.AddRange(request.BreakawayChildProcesses.Select(child => new DirectGraphBreakawayChildProcess(
+                RequiredString(child.HasProcessName, child.ProcessName, "breakaway_child_processes.process_name"), child.RequiredArguments, child.RequiredArgumentsIgnoreCase)));
+            native.SuccessExitCodes.AddRange(request.SuccessExitCodes);
+            native.RetryExitCodes.AddRange(request.RetryExitCodes);
+            native.SucceedFastExitCodes.AddRange(request.SucceedFastExitCodes);
+            native.UncacheableExitCodes.AddRange(request.UncacheableExitCodes);
+            foreach (var reference in request.OrderOnlyInputs)
+            {
+                if (reference.ReferenceCase != FileArtifactReference.ReferenceOneofCase.ProducedFile)
+                    throw new InvalidRequestException("An order-only prerequisite must name a produced file.");
+                native.OrderOnlyInputs.Add(new(ResolveProducedFile(reference.ProducedFile, "order_only_inputs"),
+                    Producer(reference.ProducedFile.ProducerOperationId, "order_only_inputs").PipId));
+            }
+            return native;
+        }
+
+        private T Common<T>(T operation, IReadOnlyList<uint> tags, bool hasDescription, uint description) where T : DirectGraphOperation
+        {
+            operation.Description = OptionalString(hasDescription, description, "description");
+            operation.Tags.AddRange(tags.Select(id => ResolveString(id, "tags")));
+            return operation;
+        }
+
         private void Accept(GraphOperation operation)
         {
-            if (operation.OperationId == 0)
-            {
-                throw new InvalidRequestException("The operation has no id. Operation ids must be non-zero.");
-            }
-
-            // An operation is recorded when it succeeds, and nothing is handled after a rejection or after Complete, so the
-            // recorded ids are all the ids that have been used.
+            if (operation.OperationId == 0) throw new InvalidRequestException("The operation has no id. Operation ids must be non-zero.");
             if (m_producedArtifacts.ContainsKey(operation.OperationId))
-            {
-                throw new InvalidRequestException(
-                    $"Operation id {operation.OperationId} has already been used. Operation ids must be unique within a stream.");
-            }
-
+                throw new InvalidRequestException($"Operation id {operation.OperationId} has already been used. Operation ids must be unique within a stream.");
             foreach (var registration in operation.NewPaths)
             {
                 CheckNextId(registration, m_paths.Count, "new_paths");
-
                 if (!AbsolutePath.TryCreate(m_pathTable, registration.Value, out var path))
-                {
                     throw new InvalidRequestException($"'{registration.Value}', registered as path id {registration.Id}, is not a valid absolute path.");
-                }
-
                 m_paths.Add(path);
             }
-
             foreach (var registration in operation.NewStrings)
             {
                 CheckNextId(registration, m_strings.Count, "new_strings");
                 m_strings.Add(StringId.Create(m_pathTable.StringTable, registration.Value));
             }
         }
-
         private static void CheckNextId(Registration registration, int registered, string field)
         {
             if (registration.Id != (uint)registered)
-            {
-                throw new InvalidRequestException(
-                    $"'{field}' registers id {registration.Id}, but the next id is {registered}. The emitter's ids no longer match BuildXL's.");
-            }
+                throw new InvalidRequestException($"'{field}' registers id {registration.Id}, but the next id is {registered}. The emitter's ids no longer match BuildXL's.");
         }
-
-        private GraphOperationResponse AddProcess(ulong operationId, AddProcessRequest request, PipData arguments)
+        private FileArtifact ResolveFile(FileArtifactReference reference, string field) => reference?.ReferenceCase switch
         {
-            if (!TryGetPipConstructionHelper(operationId, request.Module, request.Symbol, out var pipConstructionHelper, out var failure))
-            {
-                return failure;
-            }
-
-            if (request.Executable == null)
-            {
-                return Failure(operationId, GraphOperationResponseStatus.InvalidRequest, "The process operation does not specify an executable.");
-            }
-
-            var executable = ResolveFile(request.Executable, "executable");
-            var workingDirectory = RequiredPath(request.HasWorkingDirectory, request.WorkingDirectory, "working_directory");
-
-            using var processBuilder = m_processBuilderFactory();
-
-            processBuilder.Executable = executable;
-            processBuilder.WorkingDirectory = DirectoryArtifact.CreateWithZeroPartialSealId(workingDirectory);
-            processBuilder.AddInputFile(executable);
-            // As in DScript, the description of the execute is the pip's usage and the tool has a description of its own.
-            processBuilder.ToolDescription = request.HasToolDescription
-                ? ResolveString(request.ToolDescription, "tool_description")
-                : StringId.Create(m_pathTable.StringTable, DefaultToolDescription);
-
-            string description = OptionalStringValue(request.HasDescription, request.Description, "description");
-            if (!string.IsNullOrEmpty(description))
-            {
-                processBuilder.Usage = PipDataBuilder.CreatePipData(m_pathTable.StringTable, string.Empty, PipDataFragmentEscaping.NoEscaping, description);
-            }
-
-            // Options and policies default as they do for a DScript process, so the emitter gets only what it asks for.
-            processBuilder.Options = ToProcessOptions(request.Options ?? new ProcessOptions());
-            processBuilder.RewritePolicy = ToRewritePolicy(request);
-            if (request.HasAbsentPathProbeInUndeclaredOpaqueMode)
-            {
-                processBuilder.AbsentPathProbeUnderOpaquesMode = request.AbsentPathProbeInUndeclaredOpaqueMode switch
-                {
-                    AbsentPathProbeMode.Unsafe => Process.AbsentPathProbeInUndeclaredOpaquesMode.Unsafe,
-                    AbsentPathProbeMode.Strict => Process.AbsentPathProbeInUndeclaredOpaquesMode.Strict,
-                    AbsentPathProbeMode.Relaxed => Process.AbsentPathProbeInUndeclaredOpaquesMode.Relaxed,
-                    _ => throw InvalidEnum((int)request.AbsentPathProbeInUndeclaredOpaqueMode, "absent_path_probe_in_undeclared_opaque_mode"),
-                };
-            }
-
-            if (arguments.IsValid)
-            {
-                processBuilder.ArgumentsBuilder.Add(arguments);
-            }
-            else
-            {
-                foreach (uint argument in request.Arguments)
-                {
-                    processBuilder.ArgumentsBuilder.Add(PipDataAtom.FromStringId(ResolveString(argument, "arguments")));
-                }
-            }
-
-            foreach (var input in request.InputFiles)
-            {
-                processBuilder.AddInputFile(ResolveFile(input, "input_files"));
-            }
-
-            foreach (var inputDirectory in request.InputDirectories)
-            {
-                processBuilder.AddInputDirectory(ResolveDirectory(inputDirectory, "input_directories"));
-            }
-
-            foreach (var output in request.OutputFiles)
-            {
-                var existence = ToFileExistence(output.Existence);
-
-                switch (output.TargetCase)
-                {
-                    case OutputFile.TargetOneofCase.Path:
-                        processBuilder.AddOutputFile(ResolvePath(output.Path, "output_files"), existence);
-                        break;
-
-                    case OutputFile.TargetOneofCase.Rewrites:
-                    {
-                        // The process reads the file it rewrites, so BuildXL has to put it in place before the process runs.
-                        var rewritten = ResolveProducedFile(output.Rewrites, "output_files");
-                        processBuilder.AddInputFile(rewritten);
-                        processBuilder.AddOutputFile(rewritten, existence);
-                        break;
-                    }
-
-                    default:
-                        throw new InvalidRequestException("'output_files' has an entry that sets neither 'path' nor 'rewrites'.");
-                }
-            }
-
-            foreach (var outputDirectory in request.OutputDirectories)
-            {
-                var outputDirectoryPath = RequiredPath(outputDirectory.HasPath, outputDirectory.Path, "output_directories");
-                bool isShared = outputDirectory.Kind switch
-                {
-                    OutputDirectoryKind.Shared => true,
-                    OutputDirectoryKind.Exclusive => false,
-                    _ => throw InvalidEnum((int)outputDirectory.Kind, "output_directories.kind"),
-                };
-
-                processBuilder.AddOutputDirectory(
-                    isShared
-                        ? m_pipGraph.ReserveSharedOpaqueDirectory(outputDirectoryPath)
-                        : DirectoryArtifact.CreateWithZeroPartialSealId(outputDirectoryPath),
-                    isShared
-                        ? BuildXL.Pips.Operations.SealDirectoryKind.SharedOpaque
-                        : BuildXL.Pips.Operations.SealDirectoryKind.Opaque);
-            }
-
-            foreach (uint exclusion in request.OutputDirectoryExclusions)
-            {
-                processBuilder.AddOutputDirectoryExclusion(ResolvePath(exclusion, "output_directory_exclusions"));
-            }
-
-            foreach (uint untracked in request.UntrackedPaths)
-            {
-                processBuilder.AddUntrackedFile(ResolvePath(untracked, "untracked_paths"));
-            }
-
-            foreach (uint untrackedScope in request.UntrackedScopes)
-            {
-                processBuilder.AddUntrackedDirectoryScope(DirectoryArtifact.CreateWithZeroPartialSealId(ResolvePath(untrackedScope, "untracked_scopes")));
-            }
-
-            foreach (var environmentVariable in request.EnvironmentVariables)
-            {
-                var name = RequiredString(environmentVariable.HasName, environmentVariable.Name, "environment_variables.name");
-
-                if (environmentVariable.IsPassThrough)
-                {
-                    processBuilder.SetPassthroughEnvironmentVariable(name);
-                }
-                else
-                {
-                    var value = RequiredString(environmentVariable.HasValue, environmentVariable.Value, "environment_variables.value");
-                    processBuilder.SetEnvironmentVariable(name, PipDataAtom.FromStringId(value), isPassThrough: false);
-                }
-            }
-
-            var semaphoreNames = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var semaphore in request.Semaphores)
-            {
-                string name = StringValue(RequiredString(semaphore.HasName, semaphore.Name, "semaphores.name"));
-                if (string.IsNullOrEmpty(name) || !semaphoreNames.Add(name) ||
-                    semaphore.Limit <= 0 || semaphore.IncrementBy <= 0 || semaphore.IncrementBy > semaphore.Limit)
-                {
-                    throw new InvalidRequestException("Semaphores require unique nonempty names and positive increments no greater than their positive limits.");
-                }
-                processBuilder.SetSemaphore(name, semaphore.Limit, semaphore.IncrementBy);
-            }
-
-            if (!TrySetProcessRuntimeBehavior(operationId, request, processBuilder, out failure))
-            {
-                return failure;
-            }
-
-            SetProcessRedirection(request, processBuilder);
-
-            foreach (var reference in request.OrderOnlyInputs)
-            {
-                if (reference.ReferenceCase != FileArtifactReference.ReferenceOneofCase.ProducedFile)
-                {
-                    throw new InvalidRequestException("An order-only prerequisite must name a produced file.");
-                }
-                ResolveProducedFile(reference.ProducedFile, "order_only_inputs");
-                var producer = Producer(reference.ProducedFile.ProducerOperationId, "order_only_inputs");
-                if (!producer.PipId.IsValid)
-                {
-                    throw new InvalidRequestException("An order-only prerequisite must name an executable or file-producing operation.");
-                }
-                processBuilder.AddOrderDependency(producer.PipId);
-            }
-
-            if (!pipConstructionHelper.TryAddProcess(processBuilder, out var processOutputs, out var process))
-            {
-                return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the process pip.");
-            }
-
-            var outputFiles = processOutputs.GetOutputFiles().ToArray();
-            Array.Sort(outputFiles, OrdinalPathOnlyFileArtifactComparer.Instance);
-
-            // Shared opaque output directories get their seal id assigned while the process is added, so this is the
-            // only place a later reference to one can be resolved from.
-            m_producedArtifacts[operationId] = new ProducedArtifacts(
-                outputFiles,
-                processOutputs.GetOutputDirectories().Select(outputDirectory => outputDirectory.Root).ToArray(),
-                process.PipId);
-
-            return Success(operationId, process.SemiStableHash);
-        }
-
-        private GraphOperationResponse AddWriteFile(ulong operationId, AddWriteFileRequest request, PipData content)
+            FileArtifactReference.ReferenceOneofCase.SourcePath => FileArtifact.CreateSourceFile(ResolvePath(reference.SourcePath, field)),
+            FileArtifactReference.ReferenceOneofCase.ProducedFile => ResolveProducedFile(reference.ProducedFile, field),
+            _ => throw new InvalidRequestException($"A file reference in '{field}' is not specified."),
+        };
+        private FileArtifact ResolveProducedFile(ProducedFileReference reference, string field)
         {
-            if (!TryGetPipConstructionHelper(operationId, request.Module, request.Symbol, out var pipConstructionHelper, out var failure))
-            {
-                return failure;
-            }
-
-            var destination = RequiredPath(request.HasDestination, request.Destination, "destination");
-
-            if (!content.IsValid)
-            {
-                var contentBuilder = new PipDataBuilder(m_pathTable.StringTable);
-                contentBuilder.Add(RequiredString(request.HasContent, request.Content, "content"));
-                content = contentBuilder.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping);
-            }
-
-            if (!pipConstructionHelper.TryWriteFile(
-                    destination,
-                    content,
-                    WriteFileEncoding.Utf8,
-                    ResolveStrings(request.Tags, "tags"),
-                    description: OptionalStringValue(request.HasDescription, request.Description, "description"),
-                    fileArtifact: out var destinationFile,
-                    pip: out var writeFile))
-            {
-                return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the write-file pip.");
-            }
-
-            m_producedArtifacts[operationId] = new ProducedArtifacts(new[] { destinationFile }, Array.Empty<DirectoryArtifact>(), writeFile.PipId);
-            return Success(operationId, writeFile.SemiStableHash);
+            var path = RequiredPath(reference.HasPath, reference.Path, field);
+            return FindFile(Producer(reference.ProducerOperationId, field), path, reference.ProducerOperationId, field);
         }
-
-        private GraphOperationResponse AddCopyFile(ulong operationId, AddCopyFileRequest request)
+        private FileArtifact FindFile(DirectGraphConstructionResult result, AbsolutePath path, ulong id, string field)
         {
-            if (!TryGetPipConstructionHelper(operationId, request.Module, request.Symbol, out var pipConstructionHelper, out var failure))
-            {
-                return failure;
-            }
-
-            if (request.Source == null)
-            {
-                return Failure(operationId, GraphOperationResponseStatus.InvalidRequest, "The copy-file operation does not specify a source.");
-            }
-
-            var source = ResolveFile(request.Source, "source");
-            var destination = RequiredPath(request.HasDestination, request.Destination, "destination");
-
-            if (!pipConstructionHelper.TryCopyFile(
-                    source,
-                    destination,
-                    request.OutputsMustRemainWritable ? CopyFile.Options.OutputsMustRemainWritable : CopyFile.Options.None,
-                    ResolveStrings(request.Tags, "tags"),
-                    OptionalStringValue(request.HasDescription, request.Description, "description"),
-                    out var destinationFile,
-                    out var copyFile))
-            {
-                return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the copy-file pip.");
-            }
-
-            m_producedArtifacts[operationId] = new ProducedArtifacts(new[] { destinationFile }, Array.Empty<DirectoryArtifact>(), copyFile.PipId);
-            return Success(operationId, copyFile.SemiStableHash);
+            int index = Array.BinarySearch(result.Files, FileArtifact.CreateSourceFile(path), OrdinalPathOnlyFileArtifactComparer.Instance);
+            if (index < 0) throw new InvalidRequestException($"'{field}' refers to file '{path.ToString(m_pathTable)}' of operation {id}, which produced no such file.");
+            return result.Files[index];
         }
-
-        private GraphOperationResponse AddSealDirectory(ulong operationId, AddSealDirectoryRequest request)
-        {
-            if (!TryGetPipConstructionHelper(operationId, request.Module, request.Symbol, out var pipConstructionHelper, out var failure))
-            {
-                return failure;
-            }
-
-            var directoryRoot = RequiredPath(request.HasDirectoryRoot, request.DirectoryRoot, "directory_root");
-
-            var exclusions = new RelativePath[request.SourceExclusions.Count];
-            if (exclusions.Length > 0 && request.Kind is not (SealDirectoryKind.SourceAllDirectories or SealDirectoryKind.SourceTopDirectoryOnly))
-            {
-                throw new InvalidRequestException("source_exclusions are only allowed for source seals.");
-            }
-            for (int i = 0; i < exclusions.Length; i++)
-            {
-                string value = StringValue(ResolveString(request.SourceExclusions[i], "source_exclusions"));
-                if (!RelativePath.TryCreate(m_pathTable.StringTable, value, out exclusions[i]) || exclusions[i].IsEmpty)
-                {
-                    throw new InvalidRequestException($"Invalid nonempty root-relative source exclusion '{value}'.");
-                }
-            }
-
-            var contents = new FileArtifact[request.Contents.Count];
-            for (int i = 0; i < contents.Length; i++)
-            {
-                contents[i] = ResolveFile(request.Contents[i], "contents");
-            }
-
-            var outputDirectoryContents = new DirectoryArtifact[request.OutputDirectoryContents.Count];
-            for (int i = 0; i < outputDirectoryContents.Length; i++)
-            {
-                outputDirectoryContents[i] = ResolveDirectory(request.OutputDirectoryContents[i], "output_directory_contents");
-            }
-
-            if (!pipConstructionHelper.TrySealDirectory(
-                    directoryRoot,
-                    SortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>.SortUnsafe(
-                        contents,
-                        OrdinalFileArtifactComparer.Instance),
-                    SortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>.SortUnsafe(
-                        outputDirectoryContents,
-                        OrdinalDirectoryArtifactComparer.Instance),
-                    ToSealDirectoryKind(request.Kind),
-                    ResolveStrings(request.Tags, "tags"),
-                    OptionalStringValue(request.HasDescription, request.Description, "description"),
-                    ResolveStrings(request.Patterns, "patterns"),
-                    out var sealedDirectory,
-                    out var sealDirectoryPip,
-                    request.Scrub,
-                    new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(exclusions))))
-            {
-                return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the seal-directory pip.");
-            }
-
-            m_producedArtifacts[operationId] = new ProducedArtifacts(Array.Empty<FileArtifact>(), new[] { sealedDirectory });
-            return Success(operationId, sealDirectoryPip.SemiStableHash);
-        }
-
-        private GraphOperationResponse AddExport(ulong operationId, AddExportRequest request)
-        {
-            if (request.Files.Count == 0 && request.Directories.Count == 0)
-            {
-                return Failure(operationId, GraphOperationResponseStatus.InvalidRequest, "The export operation does not specify any files or directories.");
-            }
-
-            foreach (var file in request.Files)
-            {
-                if (!m_registerExport(request.Module, FileOrDirectoryArtifact.Create(ResolveFile(file, "files")), out string error))
-                {
-                    return Failure(operationId, GraphOperationResponseStatus.InvalidRequest, error);
-                }
-            }
-
-            foreach (var directory in request.Directories)
-            {
-                if (!m_registerExport(request.Module, FileOrDirectoryArtifact.Create(ResolveDirectory(directory, "directories")), out string error))
-                {
-                    return Failure(operationId, GraphOperationResponseStatus.InvalidRequest, error);
-                }
-            }
-
-            // Claim the id so it cannot be reused; exports produce no artifacts.
-            m_producedArtifacts[operationId] = new ProducedArtifacts(Array.Empty<FileArtifact>(), Array.Empty<DirectoryArtifact>());
-            return Success(operationId);
-        }
-
-        private GraphOperationResponse AddCompositeSharedOpaqueDirectory(ulong operationId, AddCompositeSharedOpaqueDirectoryRequest request)
-        {
-            if (!TryGetPipConstructionHelper(operationId, request.Module, request.Symbol, out var pipConstructionHelper, out var failure))
-            {
-                return failure;
-            }
-
-            var directoryRoot = RequiredPath(request.HasDirectoryRoot, request.DirectoryRoot, "directory_root");
-
-            var contents = new DirectoryArtifact[request.Contents.Count];
-            for (int i = 0; i < contents.Length; i++)
-            {
-                contents[i] = ResolveDirectory(request.Contents[i], "contents");
-
-                if (!contents[i].IsSharedOpaque)
-                {
-                    return Failure(
-                        operationId,
-                        GraphOperationResponseStatus.InvalidRequest,
-                        $"'{contents[i].Path.ToString(m_pathTable)}' cannot be composed because it is not a shared opaque directory.");
-                }
-            }
-
-            SealDirectoryContentFilter? contentFilter = null;
-            if (request.ContentFilter != null)
-            {
-                // Checked as DScript checks it, rather than failing the scheduler when the composite runs.
-                try
-                {
-                    _ = new Regex(request.ContentFilter.Regex);
-                }
-                catch (ArgumentException e)
-                {
-                    return Failure(operationId, GraphOperationResponseStatus.InvalidRequest, $"'content_filter.regex' is not a valid regular expression: {e.Message}");
-                }
-
-                contentFilter = new SealDirectoryContentFilter(
-                    request.ContentFilter.Kind switch
-                    {
-                        ContentFilterKind.Include => SealDirectoryContentFilter.ContentFilterKind.Include,
-                        ContentFilterKind.Exclude => SealDirectoryContentFilter.ContentFilterKind.Exclude,
-                        _ => throw InvalidEnum((int)request.ContentFilter.Kind, "content_filter.kind"),
-                    },
-                    request.ContentFilter.Regex);
-            }
-
-            var action = request.Action switch
-            {
-                CompositionActionKind.WidenDirectoryCone => SealDirectoryCompositionActionKind.WidenDirectoryCone,
-                CompositionActionKind.NarrowDirectoryCone => SealDirectoryCompositionActionKind.NarrowDirectoryCone,
-                _ => throw InvalidEnum((int)request.Action, "action"),
-            };
-
-            if (!pipConstructionHelper.TryComposeSharedOpaqueDirectory(
-                    directoryRoot,
-                    contents,
-                    action,
-                    contentFilter,
-                    OptionalStringValue(request.HasDescription, request.Description, "description"),
-                    ResolveStrings(request.Tags, "tags"),
-                    out var composedDirectory,
-                    out var composedPip))
-            {
-                return Failure(operationId, GraphOperationResponseStatus.GraphError, "BuildXL rejected the composed shared opaque directory.");
-            }
-
-            long semiStableHash = composedPip?.SemiStableHash ?? 0;
-            m_producedArtifacts[operationId] = new ProducedArtifacts(Array.Empty<FileArtifact>(), new[] { composedDirectory });
-            return Success(operationId, semiStableHash);
-        }
-
-        /// <summary>
-        /// Resolves the pip construction helper that owns pips for a module and target symbol.
-        /// </summary>
-        private bool TryGetPipConstructionHelper(
-            ulong operationId,
-            string module,
-            string symbol,
-            out PipConstructionHelper pipConstructionHelper,
-            out GraphOperationResponse failure)
-        {
-            pipConstructionHelper = null;
-            failure = null;
-
-            if (string.IsNullOrEmpty(symbol))
-            {
-                failure = Failure(
-                    operationId,
-                    GraphOperationResponseStatus.InvalidRequest,
-                    "The operation does not specify a symbol. Every pip has to name the target it belongs to, so that its provenance is stable across builds.");
-                return false;
-            }
-
-            if (!m_pipConstructionHelperResolver(module, symbol, out pipConstructionHelper, out string error))
-            {
-                failure = Failure(operationId, GraphOperationResponseStatus.InvalidRequest, error);
-                return false;
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// Resolves a file reference: a source path, or a file an earlier operation produced.
-        /// </summary>
-        private FileArtifact ResolveFile(FileArtifactReference reference, string field)
-        {
-            switch (reference?.ReferenceCase)
-            {
-                case FileArtifactReference.ReferenceOneofCase.SourcePath:
-                    return FileArtifact.CreateSourceFile(ResolvePath(reference.SourcePath, field));
-
-                case FileArtifactReference.ReferenceOneofCase.ProducedFile:
-                    return ResolveProducedFile(reference.ProducedFile, field);
-
-                default:
-                    throw new InvalidRequestException($"A file reference in '{field}' is not specified.");
-            }
-        }
-
-        /// <summary>
-        /// Resolves a reference to a file an earlier operation produced: the artifact that operation wrote.
-        /// </summary>
-        private FileArtifact ResolveProducedFile(ProducedFileReference produced, string field)
-        {
-            var path = RequiredPath(produced.HasPath, produced.Path, field);
-            var producer = Producer(produced.ProducerOperationId, field);
-
-            int index = Array.BinarySearch(
-                producer.Files,
-                FileArtifact.CreateSourceFile(path),
-                OrdinalPathOnlyFileArtifactComparer.Instance);
-
-            if (index < 0)
-            {
-                throw new InvalidRequestException(
-                    $"'{field}' refers to file '{path.ToString(m_pathTable)}' of operation {produced.ProducerOperationId}, which produced no such file.");
-            }
-
-            return producer.Files[index];
-        }
-
-        /// <summary>
-        /// Resolves a reference to one of the directories an earlier operation produced.
-        /// </summary>
         private DirectoryArtifact ResolveDirectory(DirectoryArtifactReference reference, string field)
         {
-            if (reference == null)
-            {
-                throw new InvalidRequestException($"A directory reference in '{field}' is not specified.");
-            }
-
+            if (reference == null) throw new InvalidRequestException($"A directory reference in '{field}' is not specified.");
             var path = RequiredPath(reference.HasPath, reference.Path, field);
-            var producer = Producer(reference.ProducerOperationId, field);
-
-            foreach (var directory in producer.Directories)
-            {
-                if (directory.Path == path)
-                {
-                    return directory;
-                }
-            }
-
-            throw new InvalidRequestException(
-                $"'{field}' refers to directory '{path.ToString(m_pathTable)}' of operation {reference.ProducerOperationId}, which produced no such directory.");
+            return FindDirectory(Producer(reference.ProducerOperationId, field), path, reference.ProducerOperationId, field);
         }
-
-        private ProducedArtifacts Producer(ulong operationId, string field)
+        private DirectoryArtifact FindDirectory(DirectGraphConstructionResult result, AbsolutePath path, ulong id, string field)
         {
-            if (!m_producedArtifacts.TryGetValue(operationId, out var produced))
-            {
-                throw new InvalidRequestException(
-                    $"'{field}' refers to operation {operationId}, which BuildXL has not received. An operation must be sent after the operations it depends on.");
-            }
-
-            return produced;
+            foreach (var directory in result.Directories) if (directory.Path == path) return directory;
+            throw new InvalidRequestException($"'{field}' refers to directory '{path.ToString(m_pathTable)}' of operation {id}, which produced no such directory.");
         }
-
-        private bool TrySetProcessRuntimeBehavior(
-            ulong operationId,
-            AddProcessRequest request,
-            ProcessBuilder processBuilder,
-            out GraphOperationResponse failure)
+        private DirectGraphConstructionResult Producer(ulong id, string field) => m_producedArtifacts.TryGetValue(id, out var result) ? result :
+            throw new InvalidRequestException($"'{field}' refers to operation {id}, which BuildXL has not received. An operation must be sent after the operations it depends on.");
+        private AbsolutePath ResolvePath(uint id, string field) => id < (uint)m_paths.Count ? m_paths[(int)id] :
+            throw new InvalidRequestException($"'{field}' refers to path id {id}, but only {m_paths.Count} paths have been registered.");
+        private AbsolutePath RequiredPath(bool present, uint id, string field) => present ? ResolvePath(id, field) : throw new InvalidRequestException($"'{field}' is required.");
+        private AbsolutePath OptionalPath(bool present, uint id, string field) => present ? ResolvePath(id, field) : AbsolutePath.Invalid;
+        private StringId ResolveString(uint id, string field) => id < (uint)m_strings.Count ? m_strings[(int)id] :
+            throw new InvalidRequestException($"'{field}' refers to string id {id}, but only {m_strings.Count} strings have been registered.");
+        private StringId RequiredString(bool present, uint id, string field) => present ? ResolveString(id, field) : throw new InvalidRequestException($"'{field}' is required.");
+        private StringId OptionalString(bool present, uint id, string field) => present ? ResolveString(id, field) : StringId.Invalid;
+        private static InvalidRequestException InvalidEnum(int value, string field) => new(value == 0
+            ? $"'{field}' is required." : $"'{field}' has the value {value}, which this version of BuildXL does not know.");
+        private static GraphOperationResponse Success(ulong id, long hash = 0) => new() { OperationId = id, Status = GraphOperationResponseStatus.Success, SemiStableHash = hash };
+        private GraphOperationResponse Failure(ulong id, GraphOperationResponseStatus status, string error)
         {
-            failure = null;
-
-            processBuilder.Tags = ResolveStringIds(request.Tags, "tags");
-
-            // As in DScript, a succeed-fast or uncacheable exit code is also a success.
-            processBuilder.SucceedFastExitCodes = ReadOnlyArray<int>.From(request.SucceedFastExitCodes);
-            processBuilder.UncacheableExitCodes = ReadOnlyArray<int>.From(request.UncacheableExitCodes);
-            processBuilder.SuccessExitCodes = ReadOnlyArray<int>.FromWithoutCopy(
-                request.SuccessExitCodes.Concat(request.SucceedFastExitCodes).Concat(request.UncacheableExitCodes).ToArray());
-            processBuilder.RetryExitCodes = ReadOnlyArray<int>.From(request.RetryExitCodes);
-            processBuilder.EnableMultiLineErrorScanning = request.EnableMultiLineErrorScanning;
-
-            if (request.TimeoutMillis > 0)
-            {
-                processBuilder.Timeout = TimeSpan.FromMilliseconds(request.TimeoutMillis);
-            }
-
-            if (request.WarningTimeoutMillis > 0)
-            {
-                processBuilder.WarningTimeout = TimeSpan.FromMilliseconds(request.WarningTimeoutMillis);
-            }
-
-            if (request.Weight > 0)
-            {
-                processBuilder.Weight = request.Weight;
-            }
-
-            if (request.Priority > 0)
-            {
-                processBuilder.Priority = request.Priority;
-            }
-
-            if (request.ProcessRetries > 0)
-            {
-                processBuilder.SetProcessRetries(request.ProcessRetries);
-            }
-
-            // As in DScript, a supplied pattern is matched with no options; an omitted one keeps the builder's default.
-            if (request.HasWarningRegex)
-            {
-                processBuilder.WarningRegex = new BuildXL.Pips.Operations.RegexDescriptor(
-                    ResolveString(request.WarningRegex, "warning_regex"),
-                    RegexOptions.None);
-            }
-
-            if (request.HasErrorRegex)
-            {
-                processBuilder.ErrorRegex = new BuildXL.Pips.Operations.RegexDescriptor(
-                    ResolveString(request.ErrorRegex, "error_regex"),
-                    RegexOptions.None);
-            }
-
-            processBuilder.AllowedUndeclareSourceReadScopes = ResolvePaths(request.AllowedUndeclaredSourceReadScopes, "allowed_undeclared_source_read_scopes");
-            processBuilder.AllowedUndeclareSourceReadPaths = ResolvePaths(request.AllowedUndeclaredSourceReadPaths, "allowed_undeclared_source_read_paths");
-
-            var survivingChildProcessNames = new PathAtom[request.AllowedSurvivingChildProcessNames.Count];
-            for (int i = 0; i < survivingChildProcessNames.Length; i++)
-            {
-                string name = StringValue(ResolveString(request.AllowedSurvivingChildProcessNames[i], "allowed_surviving_child_process_names"));
-                if (!PathAtom.TryCreate(m_pathTable.StringTable, name, out survivingChildProcessNames[i]))
-                {
-                    failure = Failure(
-                        operationId,
-                        GraphOperationResponseStatus.InvalidRequest,
-                        $"'{name}' is not a valid process name for 'allowed_surviving_child_process_names'.");
-                    return false;
-                }
-            }
-
-            processBuilder.AllowedSurvivingChildProcessNames = ReadOnlyArray<PathAtom>.From(survivingChildProcessNames);
-
-            var breakawayChildProcesses = new IBreakawayChildProcess[request.BreakawayChildProcesses.Count];
-            for (int i = 0; i < breakawayChildProcesses.Length; i++)
-            {
-                var breakaway = request.BreakawayChildProcesses[i];
-                string name = StringValue(RequiredString(breakaway.HasProcessName, breakaway.ProcessName, "breakaway_child_processes.process_name"));
-                if (!PathAtom.TryCreate(m_pathTable.StringTable, name, out var breakawayName))
-                {
-                    failure = Failure(
-                        operationId,
-                        GraphOperationResponseStatus.InvalidRequest,
-                        $"'{name}' is not a valid process name for 'breakaway_child_processes'.");
-                    return false;
-                }
-
-                // The proto type of the same name wins inside this namespace.
-                breakawayChildProcesses[i] = new global::BuildXL.Utilities.Configuration.Mutable.BreakawayChildProcess
-                {
-                    ProcessName = breakawayName,
-                    RequiredArguments = breakaway.RequiredArguments ?? string.Empty,
-                    RequiredArgumentsIgnoreCase = breakaway.RequiredArgumentsIgnoreCase,
-                };
-            }
-
-            processBuilder.ChildProcessesToBreakawayFromSandbox = ReadOnlyArray<IBreakawayChildProcess>.From(breakawayChildProcesses);
-
-            if (request.HasRetryAttemptEnvironmentVariable)
-            {
-                processBuilder.SetRetryAttemptEnvironmentVariable(ResolveString(request.RetryAttemptEnvironmentVariable, "retry_attempt_environment_variable"));
-            }
-
-            return true;
+            m_firstRejection ??= (id, error);
+            return new() { OperationId = id, Status = status, Error = error };
         }
-
-        private void SetProcessRedirection(AddProcessRequest request, ProcessBuilder processBuilder)
+        private static bool TryGetOperationCounters(GraphOperation.OperationOneofCase kind, out DirectGraphCounter count, out DirectGraphCounter duration)
         {
-            if (request.HasStandardOutput)
+            (count, duration) = kind switch
             {
-                processBuilder.SetStandardOutputFile(ResolvePath(request.StandardOutput, "standard_output"));
-            }
-
-            if (request.HasStandardError)
-            {
-                processBuilder.SetStandardErrorFile(ResolvePath(request.StandardError, "standard_error"));
-            }
-
-            if (request.HasTraceFile)
-            {
-                processBuilder.SetTraceFile(ResolvePath(request.TraceFile, "trace_file"));
-            }
-
-            if (request.EnableTempDirectory && request.HasTempDirectory)
-            {
-                throw new InvalidRequestException("enable_temp_directory and temp_directory are mutually exclusive.");
-            }
-
-            if (request.EnableTempDirectory)
-            {
-                processBuilder.EnableTempDirectory();
-            }
-            else if (request.HasTempDirectory)
-            {
-                processBuilder.SetTempDirectory(DirectoryArtifact.CreateWithZeroPartialSealId(ResolvePath(request.TempDirectory, "temp_directory")));
-            }
-
-            processBuilder.AdditionalTempDirectories = ResolvePaths(request.AdditionalTempDirectories, "additional_temp_directories");
-        }
-
-        private AbsolutePath ResolvePath(uint id, string field) =>
-            id < (uint)m_paths.Count
-                ? m_paths[(int)id]
-                : throw new InvalidRequestException($"'{field}' refers to path id {id}, but only {m_paths.Count} paths have been registered.");
-
-        private AbsolutePath RequiredPath(bool isSet, uint id, string field) =>
-            isSet ? ResolvePath(id, field) : throw new InvalidRequestException($"'{field}' is required.");
-
-        private ReadOnlyArray<AbsolutePath> ResolvePaths(IReadOnlyList<uint> ids, string field)
-        {
-            var paths = new AbsolutePath[ids.Count];
-            for (int i = 0; i < paths.Length; i++)
-            {
-                paths[i] = ResolvePath(ids[i], field);
-            }
-
-            return ReadOnlyArray<AbsolutePath>.FromWithoutCopy(paths);
-        }
-
-        private StringId ResolveString(uint id, string field) =>
-            id < (uint)m_strings.Count
-                ? m_strings[(int)id]
-                : throw new InvalidRequestException($"'{field}' refers to string id {id}, but only {m_strings.Count} strings have been registered.");
-
-        private StringId RequiredString(bool isSet, uint id, string field) =>
-            isSet ? ResolveString(id, field) : throw new InvalidRequestException($"'{field}' is required.");
-
-        private ReadOnlyArray<StringId> ResolveStringIds(IReadOnlyList<uint> ids, string field)
-        {
-            if (ids.Count == 0)
-            {
-                return ReadOnlyArray<StringId>.Empty;
-            }
-
-            var values = new StringId[ids.Count];
-            for (int i = 0; i < values.Length; i++)
-            {
-                values[i] = ResolveString(ids[i], field);
-            }
-
-            return ReadOnlyArray<StringId>.FromWithoutCopy(values);
-        }
-
-        private string StringValue(StringId value) => value.ToString(m_pathTable.StringTable);
-
-        private string OptionalStringValue(bool isSet, uint id, string field) => isSet ? StringValue(ResolveString(id, field)) : null;
-
-        /// <summary>
-        /// Values for the pip construction APIs that take plain strings, where null means none.
-        /// </summary>
-        private string[] ResolveStrings(IReadOnlyList<uint> ids, string field)
-        {
-            if (ids.Count == 0)
-            {
-                return null;
-            }
-
-            var values = new string[ids.Count];
-            for (int i = 0; i < values.Length; i++)
-            {
-                values[i] = StringValue(ResolveString(ids[i], field));
-            }
-
-            return values;
-        }
-
-        /// <summary>
-        /// The flags DScript sets for the same execute arguments (AmbientTransformer.Process), defaults included.
-        /// </summary>
-        private Process.Options ToProcessOptions(ProcessOptions options)
-        {
-            var result = options.UnsafeSkipGlobalDependencies ? Process.Options.None : Process.Options.RequireGlobalDependencies;
-
-            foreach (var (isSet, flag) in s_processOptionFlags)
-            {
-                if (isSet(options))
-                {
-                    result |= flag;
-                }
-            }
-
-            if (options.UnsafeAllowPreservedOutputs && m_sandboxConfiguration.PreserveOutputsForIncrementalTool)
-            {
-                result |= Process.Options.IncrementalTool;
-            }
-
-            return result;
-        }
-
-        private static readonly (Func<ProcessOptions, bool> IsSet, Process.Options Flag)[] s_processOptionFlags =
-        {
-            (o => o.KeepOutputsWritable, Process.Options.OutputsMustRemainWritable),
-            (o => o.RequiresAdmin, Process.Options.RequiresAdmin),
-            (o => o.IsLight, Process.Options.IsLight),
-            (o => o.ScanForBuildxlHints, Process.Options.EnableBuildXLHintScanning),
-            (o => o.AllowUndeclaredSourceReads, Process.Options.AllowUndeclaredSourceReads),
-            (o => o.PreservePathSetCasing, Process.Options.PreservePathSetCasing),
-            (o => o.EnforceWeakFingerprintAugmentation, Process.Options.EnforceWeakFingerprintAugmentation),
-            (o => o.DisableCacheLookup, Process.Options.DisableCacheLookup),
-            (o => o.Uncancellable, Process.Options.Uncancellable),
-            (o => o.MustRunOnOrchestrator, Process.Options.MustRunOnOrchestrator),
-            (o => o.WritingToStandardErrorFailsExecution, Process.Options.WritingToStandardErrorFailsExecution),
-            (o => o.DependsOnCurrentHostOsDirectories, Process.Options.DependsOnCurrentOs),
-            (o => o.DependsOnWindowsAppData, Process.Options.DependsOnWindowsAppData),
-            (o => o.UnsafeHasUntrackedChildProcesses, Process.Options.HasUntrackedChildProcesses),
-            (o => o.UnsafeAllowPreservedOutputs, Process.Options.AllowPreserveOutputs),
-            (o => o.UnsafeIncrementalTool, Process.Options.IncrementalTool),
-            (o => o.UnsafeTrustStaticallyDeclaredAccesses, Process.Options.TrustStaticallyDeclaredAccesses),
-            (o => o.UnsafeDisableFullReparsePointResolving, Process.Options.DisableFullReparsePointResolving),
-            (o => o.UnsafeDisableSandboxing, Process.Options.DisableSandboxing),
-        };
-
-        /// <summary>
-        /// The requested policies, each falling back to the build's configured one as it does for a DScript process.
-        /// </summary>
-        private RewritePolicy ToRewritePolicy(AddProcessRequest request)
-        {
-            var doubleWrite = request.HasDoubleWritePolicy
-                ? request.DoubleWritePolicy switch
-                {
-                    DoubleWritePolicy.DoubleWritesAreErrors => RewritePolicy.DoubleWritesAreErrors,
-                    DoubleWritePolicy.AllowSameContentDoubleWrites => RewritePolicy.AllowSameContentDoubleWrites,
-                    DoubleWritePolicy.UnsafeFirstDoubleWriteWins => RewritePolicy.UnsafeFirstDoubleWriteWins,
-                    _ => throw InvalidEnum((int)request.DoubleWritePolicy, "double_write_policy"),
-                }
-                : m_sandboxConfiguration.UnsafeSandboxConfiguration.DoubleWritePolicy();
-
-            var sourceRewrite = request.HasSourceRewritePolicy
-                ? request.SourceRewritePolicy switch
-                {
-                    SourceRewritePolicy.SourceRewritesAreErrors => RewritePolicy.SourceRewritesAreErrors,
-                    SourceRewritePolicy.SafeSourceRewritesAreAllowed => RewritePolicy.SafeSourceRewritesAreAllowed,
-                    _ => throw InvalidEnum((int)request.SourceRewritePolicy, "source_rewrite_policy"),
-                }
-                : m_sandboxConfiguration.UnsafeSandboxConfiguration.SourceWritePolicy();
-
-            return doubleWrite | sourceRewrite;
-        }
-
-        private static FileExistence ToFileExistence(FileExistenceKind kind) => kind switch
-        {
-            FileExistenceKind.Required => FileExistence.Required,
-            FileExistenceKind.Temporary => FileExistence.Temporary,
-            FileExistenceKind.Optional => FileExistence.Optional,
-            _ => throw InvalidEnum((int)kind, "output_files.existence"),
-        };
-
-        private static BuildXL.Pips.Operations.SealDirectoryKind ToSealDirectoryKind(SealDirectoryKind kind) => kind switch
-        {
-            SealDirectoryKind.Partial => BuildXL.Pips.Operations.SealDirectoryKind.Partial,
-            SealDirectoryKind.Full => BuildXL.Pips.Operations.SealDirectoryKind.Full,
-            SealDirectoryKind.SourceAllDirectories => BuildXL.Pips.Operations.SealDirectoryKind.SourceAllDirectories,
-            SealDirectoryKind.SourceTopDirectoryOnly => BuildXL.Pips.Operations.SealDirectoryKind.SourceTopDirectoryOnly,
-            _ => throw InvalidEnum((int)kind, "kind"),
-        };
-
-        /// <summary>
-        /// An enum field's zero value means it was not set, which is rejected like any missing required value.
-        /// </summary>
-        private static InvalidRequestException InvalidEnum(int value, string field) =>
-            new InvalidRequestException(value == 0
-                ? $"'{field}' is required."
-                : $"'{field}' has the value {value}, which this version of BuildXL does not know.");
-
-        private GraphOperationResponse VersionMismatch(GraphOperation operation) =>
-            Failure(
-                operation.OperationId,
-                GraphOperationResponseStatus.VersionMismatch,
-                operation.ProtocolVersion == 0
-                    ? $"The emitter did not set GraphOperation.protocol_version. This BuildXL speaks DirectGraph protocol version {DirectGraphProtocol.Version}."
-                    : $"The emitter speaks DirectGraph protocol version {operation.ProtocolVersion}. This BuildXL speaks version {DirectGraphProtocol.Version}.");
-
-        /// <summary>
-        /// Response to an operation that arrived after graph construction had already failed.
-        /// </summary>
-        /// <remarks>
-        /// The stream is deliberately left open rather than aborted. Aborting would replace BuildXL's reason with a
-        /// transport error on the emitter's side; answering every subsequent operation with this status instead lets
-        /// the emitter see what went wrong, stop, and exit on its own terms. <see cref="DirectGraphServer"/> still
-        /// ends the stream when Complete arrives, whatever status Complete itself was answered with.
-        /// </remarks>
-        private GraphOperationResponse AlreadyFailed(ulong operationId)
-        {
-            var (rejectedOperationId, rejectedError) = m_firstRejection.Value;
-
-            return Failure(
-                operationId,
-                GraphOperationResponseStatus.PreviousOperationRejected,
-                $"Graph construction already failed at operation {rejectedOperationId}, so this operation was not processed. " +
-                $"That operation was rejected because: {rejectedError}");
-        }
-
-        private static GraphOperationResponse WithProtocolVersion(GraphOperationResponse response)
-        {
-            response.ProtocolVersion = DirectGraphProtocol.Version;
-            return response;
-        }
-
-        private static GraphOperationResponse Success(ulong operationId, long semiStableHash = 0) =>
-            new GraphOperationResponse { OperationId = operationId, Status = GraphOperationResponseStatus.Success, SemiStableHash = semiStableHash };
-
-        private GraphOperationResponse Failure(ulong operationId, GraphOperationResponseStatus status, string error)
-        {
-            m_firstRejection ??= (operationId, error);
-            return new GraphOperationResponse { OperationId = operationId, Status = status, Error = error };
-        }
-
-        /// <summary>
-        /// What an operation produced that a later operation can refer to. The files are sorted by path, so that a
-        /// reference is found by binary search.
-        /// </summary>
-        private readonly record struct ProducedArtifacts(FileArtifact[] Files, DirectoryArtifact[] Directories, PipId PipId = default);
-
-        /// <summary>
-        /// Rejects the operation being dispatched as an invalid request. Thrown and caught only within dispatching.
-        /// </summary>
-        private sealed class InvalidRequestException : Exception
-        {
-            public InvalidRequestException(string message)
-                : base(message)
-            {
-            }
+                GraphOperation.OperationOneofCase.AddProcess => (DirectGraphCounter.AddProcessCount, DirectGraphCounter.AddProcessDuration),
+                GraphOperation.OperationOneofCase.AddWriteFile => (DirectGraphCounter.AddWriteFileCount, DirectGraphCounter.AddWriteFileDuration),
+                GraphOperation.OperationOneofCase.AddCopyFile => (DirectGraphCounter.AddCopyFileCount, DirectGraphCounter.AddCopyFileDuration),
+                GraphOperation.OperationOneofCase.AddSealDirectory => (DirectGraphCounter.AddSealDirectoryCount, DirectGraphCounter.AddSealDirectoryDuration),
+                GraphOperation.OperationOneofCase.AddCompositeSharedOpaqueDirectory => (DirectGraphCounter.AddCompositeSharedOpaqueDirectoryCount, DirectGraphCounter.AddCompositeSharedOpaqueDirectoryDuration),
+                GraphOperation.OperationOneofCase.AddExport => (DirectGraphCounter.AddExportCount, DirectGraphCounter.AddExportDuration),
+                GraphOperation.OperationOneofCase.Complete => (DirectGraphCounter.CompleteCount, DirectGraphCounter.CompleteDuration),
+                _ => default,
+            };
+            return kind is >= GraphOperation.OperationOneofCase.AddProcess and <= GraphOperation.OperationOneofCase.AddExport;
         }
     }
 }
