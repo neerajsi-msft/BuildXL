@@ -14,6 +14,7 @@ namespace BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver
         /// Dependencies have already been constructed. Only direct dependencies are visible;
         /// forwarding an artifact requires an explicit re-export. Failed construction aborts linking.
         /// Unscheduled dependencies are absent from <paramref name="dependencyOutputs"/>.
+        /// Implementations used with parallel scheduling must support simultaneous calls for different projects.
         /// </summary>
         Possible<ProjectGraphOutputs> TryScheduleProject(
             TProject project,

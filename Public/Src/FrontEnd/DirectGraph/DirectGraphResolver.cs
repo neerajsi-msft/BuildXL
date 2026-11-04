@@ -50,7 +50,8 @@ namespace BuildXL.FrontEnd.DirectGraph
         private readonly Lazy<Task<bool>> m_graphConstruction;
         private readonly CounterCollection<DirectGraphCounter> m_counters;
         private readonly ConcurrentDictionary<(string moduleName, FullSymbol symbol), PipConstructionHelper> m_pipConstructionHelpers = new();
-        private readonly Dictionary<string, (OrderedMap Files, OrderedMap Directories)> m_exports = new(StringComparer.Ordinal);
+        // Each project/stream is the sole writer of its module's immutable export maps.
+        private readonly ConcurrentDictionary<string, (OrderedMap Files, OrderedMap Directories)> m_exports = new(StringComparer.Ordinal);
         private DirectGraphWorkspaceResolver m_workspaceResolver;
         private IDirectGraphResolverSettings m_resolverSettings;
 
@@ -92,7 +93,8 @@ namespace BuildXL.FrontEnd.DirectGraph
 
             foreach (var module in m_workspaceResolver.ModuleDefinitions.Keys)
             {
-                m_exports.Add(module.Name, (OrderedMap.Empty, OrderedMap.Empty));
+                bool added = m_exports.TryAdd(module.Name, (OrderedMap.Empty, OrderedMap.Empty));
+                Contract.Assert(added);
             }
 
             return Task.FromResult(true);
@@ -359,7 +361,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                 traceOperation: m_resolverSettings.EnableProjectGraphVerboseLogging ?? false,
                 counters: m_counters);
 
-        private Task<bool> ConstructTextGraphAsync()
+        private async Task<bool> ConstructTextGraphAsync()
         {
             RegisterModulesTheHostLeftOut();
             try
@@ -377,18 +379,19 @@ namespace BuildXL.FrontEnd.DirectGraph
                     },
                     path => m_host.Engine.FileExists(path),
                     m_context.CancellationToken);
-                var result = new ProjectGraphToGraphConstructor<DirectGraphProject>(constructor).TrySchedule(
-                    projects, m_context.QualifierTable.EmptyQualifierId);
+                var result = await new ProjectGraphToGraphConstructor<DirectGraphProject>(
+                    constructor, m_host.Configuration.FrontEnd.MaxFrontEndConcurrency()).TryScheduleAsync(
+                        projects, m_context.QualifierTable.EmptyQualifierId, m_context.CancellationToken);
                 if (!result.Succeeded)
                 {
                     Tracing.Logger.Log.TextGraphError(m_context.LoggingContext, result.Failure.Describe());
                 }
-                return Task.FromResult(result.Succeeded);
+                return result.Succeeded;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 Tracing.Logger.Log.TextGraphError(m_context.LoggingContext, exception.Message);
-                return Task.FromResult(false);
+                return false;
             }
         }
 

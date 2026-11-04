@@ -45,14 +45,14 @@ namespace BuildXL.FrontEnd.DirectGraph
             m_cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                // The native builder completes each operation synchronously. The shared construction contract
-                // is synchronous too; no transport or emitter task is involved in this path.
+                // Each project owns an ordered loader/builder stream. The generic coordinator supplies
+                // bounded parallelism across projects; no transport or emitter task is involved here.
                 return m_createLoader(m_state).LoadProjectAsync(
                     project.Settings, dependencyOutputs, m_open, m_sourceExists, m_cancellationToken).GetAwaiter().GetResult();
             }
-            catch (InvalidDataException exception)
+            catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
             {
-                return new Failure<string>(exception.Message);
+                return new Failure<string>($"Project '{project.Name}': {exception.Message}");
             }
         }
     }

@@ -59,6 +59,8 @@ namespace BuildXL.Engine.DirectGraph
         private (ulong OperationId, string Error)? m_firstRejection;
         private bool m_complete;
 
+        // One ordered stream owns each builder, including its values, operation IDs and producer maps.
+        // Parallel text projects use separate builders; only thread-safe counters and native graph APIs are shared.
         // The values the emitter registered, indexed by id in the order it registered them.
         private readonly List<AbsolutePath> m_paths = new();
         private readonly List<StringId> m_strings = new();

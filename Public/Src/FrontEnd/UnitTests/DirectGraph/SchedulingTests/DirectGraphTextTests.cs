@@ -603,6 +603,67 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Theory]
+        [InlineData(false, false, 1)]
+        [InlineData(false, true, 1)]
+        [InlineData(true, false, 1)]
+        [InlineData(true, true, 1)]
+        [InlineData(false, false, 2)]
+        [InlineData(false, true, 2)]
+        [InlineData(true, false, 2)]
+        [InlineData(true, true, 2)]
+        public async Task ExplicitSourcesCannotMaskSiblingOutputsInEitherLoadOrder(bool sourceFirst, bool directory, int maxConcurrency)
+        {
+            using var claimed = new ManualResetEventSlim();
+            var consumer = Project("consumer", """
+                directgraph 2
+                path 0 "out/input"
+                path 1 "result/copy"
+                copyFile read
+                  source $p0
+                  destination $p1
+                """);
+            var producer = Project("producer", directory ? """
+                directgraph 2
+                path 0 "tool"
+                path 1 "."
+                path 2 "out"
+                process produce
+                  executable $p0
+                  workingDirectory $p1
+                  outputDirectory $p2 shared
+                """ : """
+                directgraph 2
+                path 0 "out/input"
+                string 0 "produced"
+                writeFile produce
+                  destination $p0
+                  content $s0
+                """);
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                Load(sourceFirst ? new[] { consumer, producer } : new[] { producer, consumer },
+                    maxConcurrency: maxConcurrency,
+                    beforeOpen: file =>
+                    {
+                        if (maxConcurrency > 1 && file == Absolute(sourceFirst ? "producer.dg" : "consumer.dg"))
+                        {
+                            Assert.True(claimed.Wait(TimeSpan.FromSeconds(30)), "The first project never claimed its paths.");
+                        }
+                    },
+                    beforeSend: operation =>
+                    {
+                        if (sourceFirst ? operation.AddCopyFile?.Module == "consumer" :
+                            operation.AddWriteFile?.Module == "producer" || operation.AddProcess?.Module == "producer")
+                        {
+                            claimed.Set();
+                        }
+                    }));
+            Assert.Equal(Absolute(sourceFirst ? "consumer.dg" : "producer.dg"), m_opened[0]);
+            Assert.Contains("Generated input", error.Message);
+            Assert.Contains("not exported by a declared dependency", error.Message);
+            Assert.Contains("consumer/read", error.Message);
+        }
+
+        [Theory]
         [InlineData(true)]
         [InlineData(false)]
         public async Task SourceSealsCannotMaskGeneratedOutputRegionsInEitherLoadOrder(bool sourceFirst)
@@ -888,6 +949,38 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Contains("private explicit file", error.Message);
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task OpaqueMemberChecksDoNotDependOnSiblingFileClaimOrder(bool readerFirst)
+        {
+            const string header = "directgraph 2\npath 0 \"tool\"\npath 1 \".\"\npath 2 \"out/opaque\"\npath 3 \"out/opaque/private\"\npath 4 \"out/result\"\nstring 0 \"content\"\n";
+            var provider = Project("provider", header +
+                "process opaque\n  executable $p0\n  workingDirectory $p1\n  outputDirectory $p2 shared\nexport publish\n  directory $p2\n");
+            var owner = Project("owner", header + "writeFile private\n  destination $p3\n  content $s0\n");
+            var consumer = Project("consumer", header +
+                "process read\n  executable $p0\n  workingDirectory $p1\n  input $p3\n  output $p4\n", "provider");
+            using var claimed = new ManualResetEventSlim();
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                Load(new[] { consumer, provider, owner }, maxConcurrency: 2,
+                    beforeOpen: file =>
+                    {
+                        if (file == Absolute(readerFirst ? "owner.dg" : "consumer.dg"))
+                        {
+                            Assert.True(claimed.Wait(TimeSpan.FromSeconds(30)));
+                        }
+                    },
+                    beforeSend: operation =>
+                    {
+                        if (readerFirst ? operation.AddProcess?.Module == "consumer" :
+                            operation.AddWriteFile?.Module == "owner")
+                        {
+                            claimed.Set();
+                        }
+                    }));
+            Assert.Contains("Opaque export does not expose private explicit file", error.Message);
+        }
+
         [Fact]
         public async Task ConfiguredOutputsOfUnselectedProjectsCannotBeHiddenBySourceSeals()
         {
@@ -1163,6 +1256,147 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Contains("Conflicting directory export identities", error.Message);
         }
 
+        [Fact]
+        public async Task IndependentProjectsConstructConcurrentlyWithinTheBound()
+        {
+            var projects = Enumerable.Range(0, 3).Select(index => Project("p" + index,
+                $"directgraph 2\npath 0 \"out/{index}\"\nstring 0 \"value{index}\"\nwriteFile write\n  destination $p0\n  content $s0")).ToArray();
+            using var entered = new CountdownEvent(2);
+            using var release = new ManualResetEventSlim();
+            int calls = 0, active = 0, peak = 0;
+            var statsLock = new object();
+            var run = Load(projects, maxConcurrency: 2, beforeSend: operation =>
+            {
+                if (operation.AddWriteFile == null)
+                {
+                    return;
+                }
+                int current = Interlocked.Increment(ref active);
+                lock (statsLock)
+                {
+                    peak = Math.Max(peak, current);
+                }
+                if (Interlocked.Increment(ref calls) <= 2)
+                {
+                    entered.Signal();
+                }
+                try
+                {
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(30)), "Parallel construction was not released.");
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref active);
+                }
+            });
+            try
+            {
+                Assert.True(entered.Wait(TimeSpan.FromSeconds(30)), "Independent native calls were serialized.");
+                Assert.Equal(2, Volatile.Read(ref active));
+                Assert.Equal(2, Volatile.Read(ref calls));
+            }
+            finally
+            {
+                release.Set();
+                await run;
+            }
+            Assert.Equal(2, peak);
+            Assert.Equal(3, calls);
+            Assert.Equal(3, m_pipGraph.RetrieveScheduledPips().OfType<WriteFile>().Count());
+        }
+
+        [Fact]
+        public async Task DependentsWaitForPublishedExportsButNotUnrelatedProjects()
+        {
+            var provider = Project("provider", """
+                directgraph 2
+                path 0 "out/include/file"
+                path 1 "out/include"
+                string 0 "content"
+                writeFile write
+                  destination $p0
+                  content $s0
+                sealDirectory seal
+                  directoryRoot $p1
+                  content $p0
+                export publish
+                  file $p0
+                  directory $p1
+                """);
+            var consumer = Project("consumer", """
+                directgraph 2
+                path 0 "out/include/file"
+                path 1 "out/include"
+                path 2 "tool"
+                path 3 "."
+                path 4 "out/result"
+                process use
+                  executable $p2
+                  workingDirectory $p3
+                  input $p0
+                  inputDirectory $p1 provider/seal
+                  output $p4
+                """, "provider");
+            var other = Project("other", "directgraph 2\npath 0 \"out/other\"\nstring 0 \"other\"\nwriteFile write\n  destination $p0\n  content $s0");
+            using var providerBlocked = new ManualResetEventSlim();
+            using var otherBlocked = new ManualResetEventSlim();
+            using var consumerStarted = new ManualResetEventSlim();
+            using var releaseProvider = new ManualResetEventSlim();
+            using var releaseOther = new ManualResetEventSlim();
+            var run = Load(new[] { consumer, other, provider }, maxConcurrency: 2,
+                beforeOpen: file =>
+                {
+                    if (file == Absolute("consumer.dg"))
+                    {
+                        lock (m_operations)
+                        {
+                            Assert.True(m_builders["provider"].IsComplete);
+                        }
+                        consumerStarted.Set();
+                    }
+                },
+                beforeSend: operation =>
+                {
+                    if (operation.AddExport?.Module == "provider")
+                    {
+                        providerBlocked.Set();
+                        Assert.True(releaseProvider.Wait(TimeSpan.FromSeconds(30)));
+                    }
+                    if (operation.AddWriteFile?.Module == "other")
+                    {
+                        otherBlocked.Set();
+                        Assert.True(releaseOther.Wait(TimeSpan.FromSeconds(30)));
+                    }
+                });
+            try
+            {
+                Assert.True(providerBlocked.Wait(TimeSpan.FromSeconds(30)));
+                Assert.True(otherBlocked.Wait(TimeSpan.FromSeconds(30)));
+                Assert.False(consumerStarted.IsSet);
+                releaseProvider.Set();
+                Assert.True(consumerStarted.Wait(TimeSpan.FromSeconds(30)), "An unrelated project held back a ready dependent.");
+            }
+            finally
+            {
+                releaseProvider.Set();
+                releaseOther.Set();
+                await run;
+            }
+            Assert.Single(m_operations.Where(operation => operation.AddProcess?.Module == "consumer"));
+        }
+
+        [Fact]
+        public async Task FailedProjectDoesNotStartDependents()
+        {
+            var failed = Project("failed", "directgraph 2\npath 0 \"out/bad\"\nstring 0 \"bad\"\nwriteFile bad\n  destination $p0\n  content $s0\n  unsupported true");
+            var dependent = Project("dependent", "directgraph 2", "failed");
+            var unrelated = Project("unrelated", "directgraph 2");
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                Load(new[] { dependent, unrelated, failed }, maxConcurrency: 3));
+            Assert.Contains("failed/bad", error.Message);
+            Assert.DoesNotContain(Absolute("dependent.dg"), m_opened);
+        }
+
         private DirectGraphProjectSettings Project(string name, string text, params string[] dependencies)
         {
             var file = Absolute(name + ".dg");
@@ -1185,9 +1419,10 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
 
         private AbsolutePath Absolute(string value) => AbsolutePath.Create(m_paths, Path.GetFullPath(value, m_root));
 
-        private Task Load(
+        private async Task Load(
             IReadOnlyList<IDirectGraphProjectSettings> projects, string[] roots = null, Func<AbsolutePath, bool> probe = null,
-            Func<GraphOperation, GraphOperationResponse> reject = null)
+            Func<GraphOperation, GraphOperationResponse> reject = null, int maxConcurrency = 1,
+            Action<GraphOperation> beforeSend = null, Action<AbsolutePath> beforeOpen = null)
         {
             var selected = DirectGraphProject.Create(projects, roots, m_paths);
             var constructor = new DirectGraphProjectGraphConstructor(m_paths, projects, state =>
@@ -1200,26 +1435,42 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                         new LoggingContext("Test"), traceOperation: false);
                     return new DirectGraphTextLoader(m_paths, builder, state, (operation, data, token) =>
                     {
+                        beforeSend?.Invoke(operation);
                         string module = operation.AddProcess?.Module ?? operation.AddWriteFile?.Module ?? operation.AddCopyFile?.Module ??
                             operation.AddSealDirectory?.Module ?? operation.AddCompositeSharedOpaqueDirectory?.Module ?? operation.AddExport?.Module;
-                        if (module != null)
+                        lock (m_operations)
                         {
-                            m_builders[module] = builder;
+                            if (module != null)
+                            {
+                                m_builders[module] = builder;
+                            }
+                            m_operations.Add(operation);
+                            m_data.Add(data);
                         }
-                        m_operations.Add(operation);
-                        m_data.Add(data);
-                        return reject == null ? builder.HandleOperationAsync(operation, data, token) : Task.FromResult(reject(operation));
+                        // TestPipGraph allocates IDs from its queue count, unlike the real concurrent PipGraph.Builder.
+                        lock (m_pipGraph)
+                        {
+                            return reject == null ? builder.HandleOperationAsync(operation, data, token) : Task.FromResult(reject(operation));
+                        }
                     });
                 },
-                file => { m_opened.Add(file); return new StringReader(m_text[file]); },
+                file =>
+                {
+                    beforeOpen?.Invoke(file);
+                    lock (m_opened)
+                    {
+                        m_opened.Add(file);
+                    }
+                    return new StringReader(m_text[file]);
+                },
                 probe ?? (_ => true), CancellationToken.None);
-            var result = new ProjectGraphToGraphConstructor<DirectGraphProject>(constructor).TrySchedule(selected, m_context.QualifierTable.EmptyQualifierId);
+            var result = await new ProjectGraphToGraphConstructor<DirectGraphProject>(constructor, maxConcurrency)
+                .TryScheduleAsync(selected, m_context.QualifierTable.EmptyQualifierId);
             if (!result.Succeeded)
             {
-                return Task.FromException(new InvalidDataException(result.Failure.Describe()));
+                throw new InvalidDataException(result.Failure.Describe());
             }
             m_outputs = result.Result;
-            return Task.CompletedTask;
         }
 
         private bool TryGetHelper(string module, string symbol, out PipConstructionHelper helper, out string error)
