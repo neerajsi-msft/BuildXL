@@ -20,6 +20,8 @@ using Test.BuildXL.TestUtilities;
 using Test.BuildXL.TestUtilities.Xunit;
 using Xunit;
 using RewritePolicy = BuildXL.Utilities.Configuration.RewritePolicy;
+using SealDirectoryKind = BuildXL.Engine.DirectGraph.SealDirectoryKind;
+using OutputDirectory = BuildXL.Engine.DirectGraph.OutputDirectory;
 
 namespace Test.BuildXL.FrontEnd.DirectGraph
 {
@@ -812,6 +814,165 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Fact]
+        public void EveryWireRuntimeAndPolicyFieldReachesTheNativeProcess()
+        {
+            AbsolutePath P(string value) => m_root.Combine(m_context.PathTable, RelativePath.Create(m_context.StringTable, value));
+            Assert.Equal(GraphOperationResponseStatus.Success, Send(new GraphOperation
+            {
+                OperationId = 1,
+                AddWriteFile = new AddWriteFileRequest { Module = TestModule, Symbol = "ready", Destination = Path("ready"), Content = Text("ready") },
+            }).Status);
+            Assert.Equal(GraphOperationResponseStatus.Success, Send(new GraphOperation
+            {
+                OperationId = 2,
+                AddSealDirectory = new AddSealDirectoryRequest { Module = TestModule, Symbol = "inputs", DirectoryRoot = Path("inputs"), Kind = SealDirectoryKind.Partial },
+            }).Status);
+            var cases = new (Action<AddProcessRequest> Set, Action<Process> Check)[]
+            {
+                (r => r.TimeoutMillis = 12345, p => Assert.Equal(TimeSpan.FromMilliseconds(12345), p.Timeout)),
+                (r => r.WarningTimeoutMillis = 4567, p => Assert.Equal(TimeSpan.FromMilliseconds(4567), p.WarningTimeout)),
+                (r => r.Weight = 3, p => Assert.Equal(3, p.Weight)),
+                (r => r.Priority = 7, p => Assert.Equal(7, p.Priority)),
+                (r => r.ProcessRetries = 2, p => Assert.Equal(2, p.ProcessRetries)),
+                (r => r.UntrackedPaths.Add(Path("untracked-file")), p => Assert.Contains(P("untracked-file"), p.UntrackedPaths)),
+                (r => r.UntrackedScopes.Add(Path("untracked-scope")), p => Assert.Contains(P("untracked-scope"), p.UntrackedScopes)),
+                (r => r.AllowedUndeclaredSourceReadScopes.Add(Path("read-scope")), p => Assert.Contains(P("read-scope"), p.AllowedUndeclaredSourceReadScopes)),
+                (r => r.AllowedUndeclaredSourceReadPaths.Add(Path("read-path")), p => Assert.Contains(P("read-path"), p.AllowedUndeclaredSourceReadPaths)),
+                (r => r.AdditionalTempDirectories.Add(Path("extra-temp")), p => Assert.Contains(P("extra-temp"), p.AdditionalTempDirectories)),
+                (r => r.OutputDirectoryExclusions.Add(Path("shared/excluded")), p => Assert.Contains(P("shared/excluded"), p.OutputDirectoryExclusions)),
+                (r => r.StandardOutput = Path("stdout"), p => Assert.Equal(P("stdout"), p.StandardOutput.Path)),
+                (r => r.StandardError = Path("stderr"), p => Assert.Equal(P("stderr"), p.StandardError.Path)),
+                (r => r.TraceFile = Path("trace"), p => Assert.Equal(P("trace"), p.TraceFile.Path)),
+                (r => r.SourceRewritePolicy = SourceRewritePolicy.SafeSourceRewritesAreAllowed,
+                    p => Assert.Equal(RewritePolicy.DoubleWritesAreErrors | RewritePolicy.SafeSourceRewritesAreAllowed, p.RewritePolicy)),
+                (r => r.DoubleWritePolicy = DoubleWritePolicy.DoubleWritesAreErrors, p => Assert.True(p.RewritePolicy.HasFlag(RewritePolicy.DoubleWritesAreErrors))),
+                (r => r.AbsentPathProbeInUndeclaredOpaqueMode = AbsentPathProbeMode.Relaxed,
+                    p => Assert.Equal(Process.AbsentPathProbeInUndeclaredOpaquesMode.Relaxed, p.ProcessAbsentPathProbeInUndeclaredOpaquesMode)),
+                (r => r.EnableMultiLineErrorScanning = true, p => Assert.True(p.EnableMultiLineErrorScanning)),
+                (r => r.SuccessExitCodes.Add(0), p => Assert.Equal(new[] { 0, 10, 20 }, p.SuccessExitCodes.ToArray())),
+                (r => r.SucceedFastExitCodes.Add(10), p => Assert.Equal(new[] { 10 }, p.SucceedFastExitCodes.ToArray())),
+                (r => r.UncacheableExitCodes.Add(20), p => Assert.Equal(new[] { 20 }, p.UncacheableExitCodes.ToArray())),
+                (r => r.RetryExitCodes.Add(30), p => Assert.Equal(new[] { 30 }, p.RetryExitCodes.ToArray())),
+                (r => r.WarningRegex = Text("WARN"), p => Assert.Equal("WARN", p.WarningRegex.Pattern.ToString(m_context.StringTable))),
+                (r => r.ErrorRegex = Text("ERROR"), p => Assert.Equal("ERROR", p.ErrorRegex.Pattern.ToString(m_context.StringTable))),
+                (r => r.AllowedSurvivingChildProcessNames.Add(Text("survivor.exe")),
+                    p => Assert.Equal("survivor.exe", Assert.Single(p.AllowedSurvivingChildProcessNames).ToString(m_context.StringTable))),
+                (r => r.BreakawayChildProcesses.Add(new BreakawayChildProcess
+                    { ProcessName = Text("breakaway.exe"), RequiredArguments = "--worker", RequiredArgumentsIgnoreCase = true }),
+                    p => { var child = Assert.Single(p.ChildProcessesToBreakawayFromSandbox);
+                        Assert.Equal("breakaway.exe", child.ProcessName.ToString(m_context.StringTable));
+                        Assert.Equal("--worker", child.RequiredArguments); Assert.True(child.RequiredArgumentsIgnoreCase); }),
+                (r => r.RetryAttemptEnvironmentVariable = Text("ATTEMPT"),
+                    p => { Assert.Equal("ATTEMPT", p.RetryAttemptEnvironmentVariable.ToString(m_context.StringTable));
+                        Assert.True(p.EnvironmentVariables.Single(v => v.Name == p.RetryAttemptEnvironmentVariable).IsPassThrough); }),
+                (r => r.Tags.Add(Text("wire-tag")), p => Assert.Contains(StringId.Create(m_context.StringTable, "wire-tag"), p.Tags)),
+                (r => r.Description = Text("usage"), p => Assert.Equal("usage", p.Provenance.Usage.ToString(m_context.PathTable))),
+                (r => r.ToolDescription = Text("tool"), p => Assert.Equal("tool", p.ToolDescription.ToString(m_context.StringTable))),
+                (r => r.Semaphores.Add(new ProcessSemaphore { Name = Text("resource"), Limit = 4, IncrementBy = 2 }),
+                    p => { var semaphore = Assert.Single(p.Semaphores); Assert.Equal(4, semaphore.Limit); Assert.Equal(2, semaphore.Value); }),
+            };
+            foreach (bool automaticTemp in new[] { false, true })
+            {
+                string symbol = automaticTemp ? "automatic" : "explicit";
+                var request = NewProcess(symbol, symbol + ".out", input: ProducedFile(1, "ready"));
+                foreach (var item in cases) item.Set(request);
+                request.Options = new ProcessOptions { AllowUndeclaredSourceReads = true, KeepOutputsWritable = true };
+                request.Arguments.Add(Text("argument"));
+                request.InputDirectories.Add(ProducedDirectory(2, "inputs"));
+                request.OrderOnlyInputs.Add(ProducedFile(1, "ready"));
+                request.OutputDirectories.Add(new OutputDirectory { Path = Path("shared"), Kind = OutputDirectoryKind.Shared });
+                request.OutputDirectories.Add(new OutputDirectory { Path = Path("exclusive"), Kind = OutputDirectoryKind.Exclusive });
+                request.EnvironmentVariables.Add(new EnvironmentVariableEntry { Name = Text("TRACKED"), Value = Text("value") });
+                request.EnvironmentVariables.Add(new EnvironmentVariableEntry { Name = Text("LATE"), IsPassThrough = true });
+                request.EnableTempDirectory = automaticTemp;
+                if (!automaticTemp) request.TempDirectory = Path("explicit-temp");
+                var response = Send(new GraphOperation { OperationId = automaticTemp ? 4UL : 3UL, AddProcess = request });
+                XAssert.AreEqual(GraphOperationResponseStatus.Success, response.Status, response.Error);
+                var process = ProcessOf(symbol);
+                foreach (var item in cases) item.Check(process);
+                Assert.True(process.TempDirectory.IsValid);
+                if (!automaticTemp) Assert.Equal(P("explicit-temp"), process.TempDirectory);
+                Assert.Equal("argument", process.Arguments.ToString(m_context.PathTable));
+                Assert.Contains(process.Dependencies, file => file.Path == P("ready") && file.IsOutputFile);
+                Assert.Equal(P("inputs"), Assert.Single(process.DirectoryDependencies).Path);
+                Assert.Single(process.OrderDependencies);
+                Assert.Contains(process.DirectoryOutputs, directory => directory.Path == P("shared") && directory.IsSharedOpaque);
+                Assert.Contains(process.DirectoryOutputs, directory => directory.Path == P("exclusive") && !directory.IsSharedOpaque);
+                Assert.Equal("value", process.EnvironmentVariables.Single(v => v.Name.ToString(m_context.StringTable) == "TRACKED").Value.ToString(m_context.PathTable));
+                Assert.True(process.EnvironmentVariables.Single(v => v.Name.ToString(m_context.StringTable) == "LATE").IsPassThrough);
+                Assert.True(process.ProcessOptions.HasFlag(Process.Options.AllowUndeclaredSourceReads | Process.Options.OutputsMustRemainWritable));
+            }
+        }
+
+        [Fact]
+        public void EveryWireSealFieldReachesTheNativeDirectory()
+        {
+            Assert.Equal(GraphOperationResponseStatus.Success, Send(new GraphOperation
+            {
+                OperationId = 1,
+                AddWriteFile = new AddWriteFileRequest { Module = TestModule, Symbol = "member", Destination = Path("sealed/input"), Content = Text("content") },
+            }).Status);
+            Assert.Equal(GraphOperationResponseStatus.Success, Send(new GraphOperation
+                { OperationId = 2, AddProcess = NewProcess("directoryOwner", "sealed/other", outputDirectory: "sealed/nested") }).Status);
+            ulong id = 2;
+            foreach (var (kind, nativeKind, source) in new[]
+            {
+                (SealDirectoryKind.Partial, global::BuildXL.Pips.Operations.SealDirectoryKind.Partial, false),
+                (SealDirectoryKind.Full, global::BuildXL.Pips.Operations.SealDirectoryKind.Full, false),
+                (SealDirectoryKind.SourceAllDirectories, global::BuildXL.Pips.Operations.SealDirectoryKind.SourceAllDirectories, true),
+                (SealDirectoryKind.SourceTopDirectoryOnly, global::BuildXL.Pips.Operations.SealDirectoryKind.SourceTopDirectoryOnly, true),
+            })
+            {
+                var request = new AddSealDirectoryRequest
+                {
+                    Module = TestModule, Symbol = "seal" + kind, Kind = kind,
+                    DirectoryRoot = Path(source ? "source/" + kind : "sealed"),
+                    Description = Text("seal usage"), Scrub = kind == SealDirectoryKind.Full,
+                };
+                request.Tags.Add(Text("seal-tag"));
+                if (source)
+                {
+                    request.Patterns.Add(new[] { Text("*.h"), Text("*.cc") });
+                    request.SourceExclusions.Add(new[] { Text(".git"), Text("nested/private") });
+                }
+                else request.Contents.Add(ProducedFile(1, "sealed/input"));
+                if (kind == SealDirectoryKind.Full) request.OutputDirectoryContents.Add(ProducedDirectory(2, "sealed/nested"));
+                var response = Send(new GraphOperation { OperationId = ++id, AddSealDirectory = request });
+                XAssert.AreEqual(GraphOperationResponseStatus.Success, response.Status, response.Error);
+                var seal = m_pipGraph.RetrieveScheduledPips().OfType<SealDirectory>()
+                    .Single(p => p.Provenance.OutputValueSymbol.ToString(m_context.SymbolTable) == request.Symbol);
+                Assert.Equal(nativeKind, seal.Kind);
+                Assert.Equal(m_root.Combine(m_context.PathTable, RelativePath.Create(m_context.StringTable, source ? "source/" + kind : "sealed")), seal.DirectoryRoot);
+                Assert.Equal(request.Scrub, seal.Scrub);
+                Assert.Equal("seal usage", seal.Provenance.Usage.ToString(m_context.PathTable));
+                Assert.Equal("seal-tag", Assert.Single(seal.Tags).ToString(m_context.StringTable));
+                Assert.Equal(source ? Array.Empty<string>() : new[] { "input" },
+                    seal.Contents.Select(file => file.Path.GetName(m_context.PathTable).ToString(m_context.StringTable)));
+                Assert.Equal(source ? new[] { "*.h", "*.cc" } : Array.Empty<string>(), seal.Patterns.Select(pattern => pattern.ToString(m_context.StringTable)));
+                Assert.Equal(source ? new[] { ".git", "nested/private" } : Array.Empty<string>(),
+                    seal.SourceExclusions.Paths.Select(path => path.ToString(m_context.StringTable)));
+                Assert.Equal(kind == SealDirectoryKind.Full ? 1 : 0, seal.OutputDirectoryContents.Length);
+                if (kind == SealDirectoryKind.Full) Assert.Equal(m_root.Combine(m_context.PathTable, RelativePath.Create(m_context.StringTable, "sealed/nested")), seal.OutputDirectoryContents[0].Path);
+            }
+        }
+
+        [Fact]
+        public void InvalidCompositeRegexPrecedesUnspecifiedEnumsOnTheWire()
+        {
+            var response = Send(new GraphOperation
+            {
+                OperationId = 1,
+                AddCompositeSharedOpaqueDirectory = new AddCompositeSharedOpaqueDirectoryRequest
+                {
+                    Module = TestModule, Symbol = "invalid", DirectoryRoot = Path("root"),
+                    ContentFilter = new ContentFilter { Regex = "(" },
+                },
+            });
+            Assert.Equal(GraphOperationResponseStatus.InvalidRequest, response.Status);
+            Assert.Contains("not a valid regular expression", response.Error);
+        }
+
+        [Fact]
         public void EveryProcessFlagIsSetByAWireOptionOrListedAsNotOnTheWire()
         {
             // The flags no wire option sets. A flag added to Process.Options fails this test until someone either puts
@@ -1088,7 +1249,8 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         private DirectoryArtifactReference ProducedDirectory(ulong producerOperationId, string relative) =>
             new() { ProducerOperationId = producerOperationId, Path = Path(relative) };
 
-        private uint Path(string relative) => Intern(m_paths, m_root.Combine(m_context.PathTable, relative).ToString(m_context.PathTable));
+        private uint Path(string relative) => Intern(m_paths,
+            m_root.Combine(m_context.PathTable, RelativePath.Create(m_context.StringTable, relative)).ToString(m_context.PathTable));
 
         private uint Text(string value) => Intern(m_strings, value);
 

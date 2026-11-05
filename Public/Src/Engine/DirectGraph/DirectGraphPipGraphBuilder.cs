@@ -55,6 +55,9 @@ namespace BuildXL.Engine.DirectGraph
         public DirectGraphPipGraphBuilder(PathTable pathTable, DirectGraphPipConstructor constructor,
             LoggingContext loggingContext, bool traceOperation, CounterCollection<DirectGraphCounter> counters = null)
         {
+            Contract.Requires(pathTable != null);
+            Contract.Requires(constructor != null);
+            Contract.Requires(loggingContext != null);
             m_pathTable = pathTable;
             PipConstructor = constructor;
             m_loggingContext = loggingContext;
@@ -184,6 +187,7 @@ namespace BuildXL.Engine.DirectGraph
                     var compose = operation.AddCompositeSharedOpaqueDirectory;
                     var root = RequiredPath(compose.HasDirectoryRoot, compose.DirectoryRoot, "directory_root");
                     var directories = compose.Contents.Select(directory => ResolveDirectory(directory, "contents")).ToArray();
+                    // Preserve wire error ordering: invalid contents/regex precede missing action/filter enums.
                     PipConstructor.ValidateCompositeDirectories(directories);
                     if (compose.ContentFilter != null) DirectGraphPipConstructor.ValidateContentFilterRegex(compose.ContentFilter.Regex);
                     var nativeCompose = Common(new DirectGraphCompositeDirectory
@@ -396,18 +400,33 @@ namespace BuildXL.Engine.DirectGraph
         }
         private static bool TryGetOperationCounters(GraphOperation.OperationOneofCase kind, out DirectGraphCounter count, out DirectGraphCounter duration)
         {
-            (count, duration) = kind switch
+            switch (kind)
             {
-                GraphOperation.OperationOneofCase.AddProcess => (DirectGraphCounter.AddProcessCount, DirectGraphCounter.AddProcessDuration),
-                GraphOperation.OperationOneofCase.AddWriteFile => (DirectGraphCounter.AddWriteFileCount, DirectGraphCounter.AddWriteFileDuration),
-                GraphOperation.OperationOneofCase.AddCopyFile => (DirectGraphCounter.AddCopyFileCount, DirectGraphCounter.AddCopyFileDuration),
-                GraphOperation.OperationOneofCase.AddSealDirectory => (DirectGraphCounter.AddSealDirectoryCount, DirectGraphCounter.AddSealDirectoryDuration),
-                GraphOperation.OperationOneofCase.AddCompositeSharedOpaqueDirectory => (DirectGraphCounter.AddCompositeSharedOpaqueDirectoryCount, DirectGraphCounter.AddCompositeSharedOpaqueDirectoryDuration),
-                GraphOperation.OperationOneofCase.AddExport => (DirectGraphCounter.AddExportCount, DirectGraphCounter.AddExportDuration),
-                GraphOperation.OperationOneofCase.Complete => (DirectGraphCounter.CompleteCount, DirectGraphCounter.CompleteDuration),
-                _ => default,
-            };
-            return kind is >= GraphOperation.OperationOneofCase.AddProcess and <= GraphOperation.OperationOneofCase.AddExport;
+                case GraphOperation.OperationOneofCase.AddProcess:
+                    (count, duration) = (DirectGraphCounter.AddProcessCount, DirectGraphCounter.AddProcessDuration);
+                    return true;
+                case GraphOperation.OperationOneofCase.AddWriteFile:
+                    (count, duration) = (DirectGraphCounter.AddWriteFileCount, DirectGraphCounter.AddWriteFileDuration);
+                    return true;
+                case GraphOperation.OperationOneofCase.AddCopyFile:
+                    (count, duration) = (DirectGraphCounter.AddCopyFileCount, DirectGraphCounter.AddCopyFileDuration);
+                    return true;
+                case GraphOperation.OperationOneofCase.AddSealDirectory:
+                    (count, duration) = (DirectGraphCounter.AddSealDirectoryCount, DirectGraphCounter.AddSealDirectoryDuration);
+                    return true;
+                case GraphOperation.OperationOneofCase.AddCompositeSharedOpaqueDirectory:
+                    (count, duration) = (DirectGraphCounter.AddCompositeSharedOpaqueDirectoryCount, DirectGraphCounter.AddCompositeSharedOpaqueDirectoryDuration);
+                    return true;
+                case GraphOperation.OperationOneofCase.AddExport:
+                    (count, duration) = (DirectGraphCounter.AddExportCount, DirectGraphCounter.AddExportDuration);
+                    return true;
+                case GraphOperation.OperationOneofCase.Complete:
+                    (count, duration) = (DirectGraphCounter.CompleteCount, DirectGraphCounter.CompleteDuration);
+                    return true;
+                default:
+                    count = duration = default;
+                    return false;
+            }
         }
     }
 }
