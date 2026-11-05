@@ -54,8 +54,9 @@ whole-argument escaping. Write-file content is likewise native `PipData`.
 registration/operation IDs, producer-reference resolution, sticky rejection,
 `Complete`, wire counters and request/response tracing stay there. It converts
 wire strings into `PipData` and calls the same core. The protocol is unchanged:
-version 4, with no wire-level PipData field. `DirectGraphValueRegistry` remains
-available to wire emitters (including the example emitter), not the text loader.
+version 4, with no wire-level PipData field. `DirectGraphValueRegistry` is an
+internal example-emitter source under `Examples/DirectGraph/GraphEmitter`, not
+a shipped engine type or a text-loader dependency.
 
 Native operation counts/durations come from the core for text and from the
 adapter for wire requests (including rejected requests), without double counting.

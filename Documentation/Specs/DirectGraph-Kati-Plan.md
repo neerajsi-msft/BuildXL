@@ -765,8 +765,9 @@ protocol and version 4 is unchanged.
 protobuf operations, maintains duplicate ID tables, creates synthetic import
 IDs or reads produced artifacts back through the adapter. The mixed PipData
 side-channel overload and host import/read-back helpers were removed after
-auditing their callers. `DirectGraphValueRegistry` remains for the wire example
-emitter. Parallel project construction, actual producer/rewrite identities,
+auditing their callers. `DirectGraphValueRegistry` is now owned solely by the
+wire example emitter under Examples and no longer ships as an engine type.
+Parallel project construction, actual producer/rewrite identities,
 native argument factoring/escaping and fingerprint behavior are retained.
 
 Further performance work remains measurement-driven. This layering cleanup

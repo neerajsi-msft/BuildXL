@@ -4,8 +4,9 @@
 using System;
 using System.Collections.Generic;
 using Google.Protobuf.Collections;
+using BuildXL.Engine.DirectGraph;
 
-namespace BuildXL.Engine.DirectGraph
+namespace GraphEmitter
 {
     /// <summary>
     /// Stream-local interning for DirectGraph callers: gives each distinct path and string its id, and registers the
@@ -16,7 +17,7 @@ namespace BuildXL.Engine.DirectGraph
     /// written, and look values up only for the operation being written next. Operations may be generated concurrently
     /// elsewhere as long as they carry plain values until then. Not thread-safe, deliberately.
     /// </remarks>
-    public sealed class DirectGraphValueRegistry
+    internal sealed class DirectGraphValueRegistry
     {
         private readonly Dictionary<string, uint> m_pathIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, uint> m_stringIds = new(StringComparer.Ordinal);
