@@ -1414,6 +1414,60 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.DoesNotContain(Absolute("dependent.dg"), m_opened);
         }
 
+        [Theory]
+        [InlineData("orderOnly")]
+        [InlineData("input")]
+        [InlineData("executable")]
+        public async Task PendingOutputsCannotBeUsedByTheirOwnOperation(string field)
+        {
+            string executable = field == "executable" ? "$p2" : "$p0";
+            string input = field == "executable" ? "" : $"  {field} $p2\n";
+            var project = Project("p", $"directgraph 2\npath 0 \"tool\"\npath 1 \".\"\npath 2 \"out/result\"\nprocess self\n  executable {executable}\n  workingDirectory $p1\n{input}  output $p2\n");
+            int probes = 0;
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                Load(new[] { project }, probe: _ => { probes++; return true; }));
+            Assert.Contains("p/self", error.Message);
+            Assert.Contains("refers to an output of the same operation", error.Message);
+            Assert.Equal(0, probes);
+            Assert.Empty(m_operations);
+        }
+
+        [Fact]
+        public async Task MultipleNativeOutputsBindByCachedPathRatherThanResultPosition()
+        {
+            for (int i = 63; i >= 0; i--) Absolute("out/file" + i);
+            for (int i = 11; i >= 0; i--) Absolute("out/dir" + i);
+            string registrations = string.Join("\n", Enumerable.Range(0, 64).Select(i => $"path {i + 2} \"out/file{i}\"")
+                .Concat(Enumerable.Range(0, 12).Select(i => $"path {i + 66} \"out/dir{i}\"")));
+            string fields = string.Join("\n", Enumerable.Range(0, 64).Select(i => $"  output $p{i + 2}")
+                .Concat(Enumerable.Range(0, 12).Select(i => $"  outputDirectory $p{i + 66} shared")));
+            var project = Project("p", $"directgraph 2\npath 0 \"tool\"\npath 1 \".\"\n{registrations}\nprocess many\n  executable $p0\n  workingDirectory $p1\n{fields}");
+            project.FileExports = Enumerable.Range(0, 64).Select(i => Absolute("out/file" + i)).ToArray();
+            project.DirectoryExports = Enumerable.Range(0, 12).Select(i => Absolute("out/dir" + i)).ToArray();
+            await Load(new[] { project });
+            var outputs = Assert.Single(m_outputs).Value;
+            Assert.All(outputs.Files, pair => Assert.Equal(pair.Key, pair.Value.Path));
+            Assert.All(outputs.Directories, pair => Assert.Equal(pair.Key, pair.Value.Root.Path));
+            Assert.Equal(64, outputs.Files.Count);
+            Assert.Equal(12, outputs.Directories.Count);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task MissingNativeOutputsReportTheDeclaringRecord(bool directory)
+        {
+            var project = Project("p", directory
+                ? "directgraph 2\npath 0 \"tool\"\npath 1 \".\"\npath 2 \"out/dir\"\nprocess missing\n  executable $p0\n  workingDirectory $p1\n  outputDirectory $p2 shared"
+                : "directgraph 2\npath 0 \"out/file\"\nstring 0 \"value\"\nwriteFile missing\n  destination $p0\n  content $s0");
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project },
+                nativeResult: result => directory ? result with { Directories = Array.Empty<DirectoryArtifact>() } :
+                    result with { Files = Array.Empty<FileArtifact>() }));
+            Assert.Contains("p.dg:", error.Message);
+            Assert.Contains("p/missing", error.Message);
+            Assert.Contains(directory ? "declared directory" : "declared file", error.Message);
+        }
+
         private DirectGraphProjectSettings Project(string name, string text, params string[] dependencies)
         {
             var file = Absolute(name + ".dg");
@@ -1439,7 +1493,8 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         private async Task Load(
             IReadOnlyList<IDirectGraphProjectSettings> projects, string[] roots = null, Func<AbsolutePath, bool> probe = null,
             Action<CapturedOperation> reject = null, int maxConcurrency = 1,
-            Action<CapturedOperation> beforeSend = null, Action<AbsolutePath> beforeOpen = null)
+            Action<CapturedOperation> beforeSend = null, Action<AbsolutePath> beforeOpen = null,
+            Func<DirectGraphConstructionResult, DirectGraphConstructionResult> nativeResult = null)
         {
             var selected = DirectGraphProject.Create(projects, roots, m_paths);
             var constructor = new DirectGraphProjectGraphConstructor(m_paths, projects, state =>
@@ -1462,7 +1517,8 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                         lock (m_pipGraph)
                         {
                             reject?.Invoke(operation);
-                            return Task.FromResult(core.Construct(native));
+                            var result = core.Construct(native);
+                            return Task.FromResult(nativeResult == null ? result : nativeResult(result));
                         }
                     });
                 },

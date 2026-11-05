@@ -116,7 +116,12 @@ namespace BuildXL.Engine.DirectGraph
     }
 
     /// <summary>Artifacts and identity returned by construction, not a transport response.</summary>
-    public sealed record DirectGraphConstructionResult(FileArtifact[] Files, DirectoryArtifact[] Directories, PipId PipId = default, long SemiStableHash = 0);
+    public sealed record DirectGraphConstructionResult(FileArtifact[] Files, DirectoryArtifact[] Directories, PipId PipId = default, long SemiStableHash = 0)
+    {
+        /// <summary>Directory outputs, like file outputs, are returned sorted by numeric path identity.</summary>
+        public static IComparer<DirectoryArtifact> DirectoryPathComparer { get; } =
+            Comparer<DirectoryArtifact>.Create((left, right) => left.Path.Value.Value.CompareTo(right.Path.Value.Value));
+    }
 
     public sealed class DirectGraphInvalidRequestException : Exception
     {

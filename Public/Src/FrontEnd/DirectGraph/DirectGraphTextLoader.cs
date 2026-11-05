@@ -368,6 +368,12 @@ namespace BuildXL.FrontEnd.DirectGraph
                 Symbol = name,
                 WorkingDirectory = PathValue(Absolute(project, fields.One("workingDirectory", required: true))),
             };
+            foreach (string path in fields.Values("output"))
+            {
+                string absolute = Absolute(project, path);
+                ClaimFile(project, absolute, name);
+                process.OutputFiles.Add(new DirectGraphFileOutput(PathValue(absolute)));
+            }
             foreach (var values in fields.Rows("inputDirectory"))
             {
                 AddInputDirectory(process, ResolveDirectory(project, values));
@@ -469,12 +475,6 @@ namespace BuildXL.FrontEnd.DirectGraph
                     throw new InvalidDataException($"Missing source order-only prerequisite '{absolute}'.");
                 }
             }
-            foreach (string path in fields.Values("output"))
-            {
-                string absolute = Absolute(project, path);
-                ClaimFile(project, absolute, name);
-                process.OutputFiles.Add(new DirectGraphFileOutput(PathValue(absolute)));
-            }
             foreach (string path in fields.Values("rewrite"))
             {
                 string absolute = Absolute(project, path);
@@ -511,6 +511,10 @@ namespace BuildXL.FrontEnd.DirectGraph
         {
             if (project.Files.TryGetValue(path, out var local))
             {
+                if (!local.Artifact.IsValid)
+                {
+                    throw new InvalidDataException($"Input '{path}' refers to an output of the same operation.");
+                }
                 return local;
             }
             var files = m_dependencies.Where(dependency => dependency.ExportedFiles.ContainsKey(path))
@@ -582,7 +586,8 @@ namespace BuildXL.FrontEnd.DirectGraph
                         m_state.SourceCones.TryAdd(ancestor, path);
                     }
                 }
-                return new FileBinding(project, path, null) { Artifact = FileArtifact.CreateSourceFile(PathValue(path)) };
+                var absolute = PathValue(path);
+                return new FileBinding(project, path, null, absolute) { Artifact = FileArtifact.CreateSourceFile(absolute) };
             }
         }
 
@@ -719,7 +724,7 @@ namespace BuildXL.FrontEnd.DirectGraph
             {
                 throw new InvalidDataException($"Duplicate file ownership at '{path}'.");
             }
-            var binding = new FileBinding(project, path, symbol);
+            var binding = new FileBinding(project, path, symbol, PathValue(path));
             m_state.Files[path] = binding;
             project.Files[path] = binding;
             m_pendingFiles.Add(binding);
@@ -727,6 +732,7 @@ namespace BuildXL.FrontEnd.DirectGraph
 
         private void AddDirectory(Project project, DirectoryBinding directory)
         {
+            directory.AbsolutePath = PathValue(directory.Path);
             lock (m_state.SyncRoot)
             {
                 AddDirectoryCore(project, directory);
@@ -836,7 +842,12 @@ namespace BuildXL.FrontEnd.DirectGraph
             var result = await m_construct(operation, cancellationToken);
             foreach (var file in m_pendingFiles)
             {
-                file.Artifact = result.Files.Single(artifact => artifact.Path == PathValue(file.Path));
+                int index = Array.BinarySearch(result.Files, FileArtifact.CreateSourceFile(file.AbsolutePath), OrdinalPathOnlyFileArtifactComparer.Instance);
+                if (index < 0)
+                {
+                    throw new InvalidDataException($"Native construction did not produce the declared file '{file.Path}'.");
+                }
+                file.Artifact = result.Files[index];
                 file.Producer = result.PipId;
                 if (!m_state.FileArtifacts.TryAdd(file.Artifact, file))
                 {
@@ -845,7 +856,13 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
             foreach (var directory in m_pendingDirectories)
             {
-                directory.Artifact = result.Directories.Single(artifact => artifact.Path == PathValue(directory.Path));
+                int index = Array.BinarySearch(result.Directories, DirectoryArtifact.CreateWithZeroPartialSealId(directory.AbsolutePath),
+                    DirectGraphConstructionResult.DirectoryPathComparer);
+                if (index < 0)
+                {
+                    throw new InvalidDataException($"Native construction did not produce the declared directory '{directory.Path}'.");
+                }
+                directory.Artifact = result.Directories[index];
             }
             m_pendingFiles.Clear();
             m_pendingDirectories.Clear();
@@ -917,7 +934,7 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
         }
 
-        internal sealed record FileBinding(Project Owner, string Path, string Symbol)
+        internal sealed record FileBinding(Project Owner, string Path, string Symbol, AbsolutePath AbsolutePath)
         {
             public FileArtifact Artifact { get; set; }
             public PipId Producer { get; set; }
@@ -928,6 +945,7 @@ namespace BuildXL.FrontEnd.DirectGraph
             public Project Owner { get; }
             public string Symbol { get; }
             public string Path { get; }
+            public AbsolutePath AbsolutePath { get; set; }
             public bool Dynamic { get; }
             public bool Source { get; }
             public HashSet<(Project Owner, string Symbol)> Producers { get; }

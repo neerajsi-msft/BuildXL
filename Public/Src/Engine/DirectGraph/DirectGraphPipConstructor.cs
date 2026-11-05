@@ -256,7 +256,9 @@ namespace BuildXL.Engine.DirectGraph
             }
             var files = outputs.GetOutputFiles().ToArray();
             Array.Sort(files, OrdinalPathOnlyFileArtifactComparer.Instance);
-            return new(files, outputs.GetOutputDirectories().Select(directory => directory.Root).ToArray(), process.PipId, process.SemiStableHash);
+            var directories = outputs.GetOutputDirectories().Select(directory => directory.Root).ToArray();
+            Array.Sort(directories, DirectGraphConstructionResult.DirectoryPathComparer);
+            return new(files, directories, process.PipId, process.SemiStableHash);
         }
 
         private void SetRuntime(DirectGraphProcess request, ProcessBuilder builder)
