@@ -351,6 +351,15 @@ does not replace dependencies on generated output files/directories or grant
 write permission. Do not make source-seal exclusions a global denylist or
 silently disable the flag on existing callers.
 
+For change-affected input lists, strict pips use the complete per-pip index.
+Nested narrower seals can therefore produce a smaller list, a consumer-visible
+weak-fingerprint change when `ChangeAffectedInputListWrittenFile` is enabled.
+A changed seal-root path counts as `Root` and is included. Pips allowing
+undeclared source reads retain the legacy per-seal
+`SourceSealWithPatterns.Contains` union, not all initial changes; explicit
+dependencies and listed seal members remain additive. Undeclared dynamic reads
+continue to be handled separately by `ReportSourceChangeAffectedFiles`.
+
 **Baseline and compatibility gate**
 
 Verified against upstream merge-base `aab9f814e31a`: `ObservedInputProcessor`

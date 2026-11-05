@@ -469,7 +469,9 @@ namespace IntegrationTest.BuildXL.Scheduler
             var explicitExcluded = Source(".git/HEAD");
             var listedExcluded = Source(".git/static.h");
             var boundaryProbe = Source("excluded-boundary");
-            var changed = new[] { broadFile, included, rejectedPattern, rejectedDepth, explicitExcluded, listedExcluded, boundaryProbe };
+            var unrelated = CreateSourceFile();
+            var changedRoot = FileArtifact.CreateSourceFile(root);
+            var changed = new[] { broadFile, included, rejectedPattern, rejectedDepth, explicitExcluded, listedExcluded, boundaryProbe, unrelated, changedRoot };
             var excludedSeal = new SealDirectory(root,
                 CollectionUtilities.EmptySortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>(OrdinalFileArtifactComparer.Instance),
                 CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
@@ -511,11 +513,12 @@ namespace IntegrationTest.BuildXL.Scheduler
             Configuration.Schedule.InputChanges = inputChanges.Path;
             RunScheduler().AssertSuccess();
 
-            var expectedRestrictive = allowUndeclaredReads ? changed :
-                new[] { broadFile, included, explicitExcluded, listedExcluded, boundaryProbe };
+            var expectedRestrictive = allowUndeclaredReads
+                ? new[] { broadFile, included, rejectedPattern, rejectedDepth, explicitExcluded, listedExcluded, boundaryProbe }
+                : new[] { broadFile, included, explicitExcluded, listedExcluded, boundaryProbe, changedRoot };
             Assert.Equal(expectedRestrictive.Select(file => ArtifactToString(file)).OrderBy(path => path, StringComparer.Ordinal),
                 File.ReadAllLines(restrictiveList.ToString(Context.PathTable)).OrderBy(path => path, StringComparer.Ordinal));
-            Assert.Equal(new[] { broadFile, included, rejectedPattern, rejectedDepth, boundaryProbe }.Select(file => ArtifactToString(file)).OrderBy(path => path, StringComparer.Ordinal),
+            Assert.Equal(new[] { broadFile, included, rejectedPattern, rejectedDepth, boundaryProbe, changedRoot }.Select(file => ArtifactToString(file)).OrderBy(path => path, StringComparer.Ordinal),
                 File.ReadAllLines(broadList.ToString(Context.PathTable)).OrderBy(path => path, StringComparer.Ordinal));
         }
 

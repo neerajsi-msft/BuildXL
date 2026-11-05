@@ -44,6 +44,7 @@ namespace BuildXL.Scheduler.ChangeAffectedOutput
         /// Affected implicit members are cached by complete per-pip policy, not by an individual seal.
         /// </summary>
         private readonly ConcurrentDictionary<SourceSealDirectoryIndex, List<AbsolutePath>> m_sourcePolicyAffectedMembers = new();
+        private readonly ConcurrentDictionary<DirectoryArtifact, List<AbsolutePath>> m_sourceSealDirectoryAffectedMembers = new();
         private readonly SourceSealDirectoryIndex.Cache m_sourceSealDirectoryIndices;
 
         /// <nodoc />
@@ -89,6 +90,7 @@ namespace BuildXL.Scheduler.ChangeAffectedOutput
         public IReadOnlyList<AbsolutePath> GetChangeAffectedInputs(Process process)
         {
             var changeAffectedInputs = new HashSet<AbsolutePath>(process.Dependencies.Select(f => f.Path).Where(p => m_sourceChangeAffectedFiles.Contains(p)));
+            bool allowUndeclaredSourceReads = process.ProcessAllowsUndeclaredSourceReads;
 
             foreach (var directory in process.DirectoryDependencies)
             {
@@ -99,23 +101,32 @@ namespace BuildXL.Scheduler.ChangeAffectedOutput
                         changeAffectedInputs.Add(file.Path);
                     }
                 }
+
+                if (allowUndeclaredSourceReads && m_fileContentManager.Host.TryGetSourceSealDirectory(directory, out var sourceSeal))
+                {
+                    // Preserve the legacy additive seal union; undeclared dynamic reads are reported separately.
+                    var affectedMembers = m_sourceSealDirectoryAffectedMembers.GetOrAdd(directory,
+                        _ => new List<AbsolutePath>(m_initialSourceChanges.Where(path => sourceSeal.Contains(PathTable, path))));
+                    changeAffectedInputs.AddRange(affectedMembers);
+                }
             }
 
-            var index = m_sourceSealDirectoryIndices.TryGet(process.PipId, out var bound) ? bound :
-                m_sourceSealDirectoryIndices.GetOrAdd(PathTable, GetSourcePolicies(process), process.PipId);
-            if (process.ProcessAllowsUndeclaredSourceReads || !index.IsValid)
+            if (!allowUndeclaredSourceReads)
             {
-                // Undeclared-read grants are independent of seals and can authorize excluded or uncovered paths.
-                // Without observations here, retain a conservative superset rather than reinterpret those grants.
-                changeAffectedInputs.AddRange(m_initialSourceChanges);
-            }
-            else if (!index.IsEmpty)
-            {
-                // Access flags are unavailable here, so keep possible exact excluded-boundary probes.
-                var affectedMembers = m_sourcePolicyAffectedMembers.GetOrAdd(index,
-                    policy => new List<AbsolutePath>(m_initialSourceChanges.Where(path =>
-                        policy.Match(PathTable, path, allowExactExcludedProbe: true) is SourceSealMatch.Included or SourceSealMatch.Root)));
-                changeAffectedInputs.AddRange(affectedMembers);
+                var index = m_sourceSealDirectoryIndices.TryGet(process.PipId, out var bound) ? bound :
+                    m_sourceSealDirectoryIndices.GetOrAdd(PathTable, GetSourcePolicies(process), process.PipId);
+                if (!index.IsValid)
+                {
+                    changeAffectedInputs.AddRange(m_initialSourceChanges);
+                }
+                else if (!index.IsEmpty)
+                {
+                    // Access flags are unavailable here, so keep possible exact excluded-boundary probes.
+                    var affectedMembers = m_sourcePolicyAffectedMembers.GetOrAdd(index,
+                        policy => new List<AbsolutePath>(m_initialSourceChanges.Where(path =>
+                            policy.Match(PathTable, path, allowExactExcludedProbe: true) is SourceSealMatch.Included or SourceSealMatch.Root)));
+                    changeAffectedInputs.AddRange(affectedMembers);
+                }
             }
             return ReadOnlyArray<AbsolutePath>.FromWithoutCopy(changeAffectedInputs.ToArray());
         }
