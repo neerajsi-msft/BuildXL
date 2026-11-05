@@ -20,9 +20,6 @@ using NativeSealKind = BuildXL.Pips.Operations.SealDirectoryKind;
 
 namespace BuildXL.Engine.DirectGraph
 {
-    public delegate bool PipConstructionHelperResolver(string moduleName, string symbol, out PipConstructionHelper helper, out string error);
-    public delegate bool TryRegisterExport(string moduleName, FileOrDirectoryArtifact artifact, out string error);
-
     /// <summary>
     /// Ordered protobuf stream adapter. Protocol IDs and sticky rejection belong here, not in native construction.
     /// </summary>
@@ -55,6 +52,16 @@ namespace BuildXL.Engine.DirectGraph
                 pipConstructionHelperResolver, registerExport, m_counters);
         }
 
+        public DirectGraphPipGraphBuilder(PathTable pathTable, DirectGraphPipConstructor constructor,
+            LoggingContext loggingContext, bool traceOperation, CounterCollection<DirectGraphCounter> counters = null)
+        {
+            m_pathTable = pathTable;
+            PipConstructor = constructor;
+            m_loggingContext = loggingContext;
+            m_traceOperation = traceOperation;
+            m_counters = counters ?? new CounterCollection<DirectGraphCounter>();
+        }
+
         public bool IsComplete => Volatile.Read(ref m_complete);
 
         public bool TryGetFirstRejection(out ulong operationId, out string error)
@@ -64,31 +71,7 @@ namespace BuildXL.Engine.DirectGraph
             return true;
         }
 
-        public void RegisterImportedArtifacts(ulong importId, FileArtifact[] files, DirectoryArtifact[] directories, PipId producer = default)
-        {
-            Contract.Requires(importId != 0 && files != null && directories != null);
-            Contract.Requires(files.All(file => file.IsValid) && directories.All(directory => directory.IsValid));
-            Contract.Requires(!m_complete && m_firstRejection == null);
-            files = files.ToArray();
-            Array.Sort(files, OrdinalPathOnlyFileArtifactComparer.Instance);
-            m_producedArtifacts.Add(importId, new(files, directories.ToArray(), producer));
-        }
-
-        public FileArtifact GetProducedFile(ulong operationId, AbsolutePath path, out PipId producer)
-        {
-            var result = Producer(operationId, "host file output");
-            producer = result.PipId;
-            return FindFile(result, path, operationId, "host file output");
-        }
-
-        public DirectoryArtifact GetProducedDirectory(ulong operationId, AbsolutePath path) =>
-            FindDirectory(Producer(operationId, "host directory output"), path, operationId, "host directory output");
-
-        public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, CancellationToken cancellationToken) =>
-            HandleOperationAsync(operation, PipData.Invalid, cancellationToken);
-
-        // Transitional text caller; removed when the text loader switches to native operations.
-        public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, PipData data, CancellationToken cancellationToken)
+        public Task<GraphOperationResponse> HandleOperationAsync(GraphOperation operation, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (m_traceOperation) Logger.Log.GraphOperationReceived(m_loggingContext, operation.ToString());
@@ -96,15 +79,15 @@ namespace BuildXL.Engine.DirectGraph
             if (TryGetOperationCounters(operation.OperationCase, out var count, out var duration))
             {
                 m_counters.IncrementCounter(count);
-                using (m_counters.StartStopwatch(duration)) { response = HandleOperation(operation, data); }
+                using (m_counters.StartStopwatch(duration)) { response = HandleOperation(operation); }
             }
-            else response = HandleOperation(operation, data);
+            else response = HandleOperation(operation);
             response.ProtocolVersion = DirectGraphProtocol.Version;
             if (m_traceOperation) Logger.Log.GraphOperationResponse(m_loggingContext, response.ToString());
             return Task.FromResult(response);
         }
 
-        private GraphOperationResponse HandleOperation(GraphOperation operation, PipData data)
+        private GraphOperationResponse HandleOperation(GraphOperation operation)
         {
             if (m_firstRejection is { } rejected)
             {
@@ -120,11 +103,6 @@ namespace BuildXL.Engine.DirectGraph
             try
             {
                 Accept(operation);
-                if (data.IsValid && !(operation.AddProcess != null ? operation.AddProcess.Arguments.Count == 0 :
-                    operation.AddWriteFile != null && !operation.AddWriteFile.HasContent))
-                {
-                    throw new InvalidRequestException("Structured data requires a process with no wire-format arguments or a write-file operation with no wire-format content.");
-                }
                 if (operation.Complete != null)
                 {
                     Volatile.Write(ref m_complete, true);
@@ -141,7 +119,7 @@ namespace BuildXL.Engine.DirectGraph
                     _ => throw new InvalidRequestException("The graph operation is not specified."),
                 };
                 var helper = operation.AddExport == null ? PipConstructor.ResolveHelper(module, symbol) : null;
-                var native = Translate(operation, data);
+                var native = Translate(operation);
                 native.Module = module;
                 native.Symbol = symbol;
                 var result = PipConstructor.Construct(native, helper, countOperation: false);
@@ -157,21 +135,21 @@ namespace BuildXL.Engine.DirectGraph
             }
         }
 
-        private DirectGraphOperation Translate(GraphOperation operation, PipData data)
+        private DirectGraphOperation Translate(GraphOperation operation)
         {
             switch (operation.OperationCase)
             {
                 case GraphOperation.OperationOneofCase.AddProcess:
-                    return TranslateProcess(operation.AddProcess, data);
+                    return TranslateProcess(operation.AddProcess);
                 case GraphOperation.OperationOneofCase.AddWriteFile:
                     var write = operation.AddWriteFile;
                     var destination = RequiredPath(write.HasDestination, write.Destination, "destination");
                     var content = new PipDataBuilder(m_pathTable.StringTable);
-                    if (!data.IsValid) content.Add(RequiredString(write.HasContent, write.Content, "content"));
+                    content.Add(RequiredString(write.HasContent, write.Content, "content"));
                     return Common(new DirectGraphWriteFile
                     {
                         Destination = destination,
-                        Content = data.IsValid ? data : content.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping),
+                        Content = content.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping),
                     }, write.Tags, write.HasDescription, write.Description);
                 case GraphOperation.OperationOneofCase.AddCopyFile:
                     var copy = operation.AddCopyFile;
@@ -236,7 +214,7 @@ namespace BuildXL.Engine.DirectGraph
             }
         }
 
-        private DirectGraphProcess TranslateProcess(AddProcessRequest request, PipData data)
+        private DirectGraphProcess TranslateProcess(AddProcessRequest request)
         {
             if (request.Executable == null) throw new InvalidRequestException("The process operation does not specify an executable.");
             var native = Common(new DirectGraphProcess
@@ -278,8 +256,7 @@ namespace BuildXL.Engine.DirectGraph
                 RetryAttemptEnvironmentVariable = OptionalString(request.HasRetryAttemptEnvironmentVariable, request.RetryAttemptEnvironmentVariable, "retry_attempt_environment_variable"),
             }, request.Tags, request.HasDescription, request.Description);
             var arguments = new PipDataBuilder(m_pathTable.StringTable);
-            if (data.IsValid) arguments.Add(data);
-            else foreach (var id in request.Arguments) arguments.Add(ResolveString(id, "arguments"));
+            foreach (var id in request.Arguments) arguments.Add(ResolveString(id, "arguments"));
             native.Arguments = arguments.ToPipData(" ", PipDataFragmentEscaping.CRuntimeArgumentRules);
             if (request.Options != null)
             {

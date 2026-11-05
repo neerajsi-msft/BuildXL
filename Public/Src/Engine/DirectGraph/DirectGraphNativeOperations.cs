@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using BuildXL.Pips;
+using BuildXL.Pips.Builders;
 using BuildXL.Pips.Operations;
 using BuildXL.Utilities.Configuration;
 using BuildXL.Utilities.Core;
@@ -11,6 +12,9 @@ using NativeSealKind = BuildXL.Pips.Operations.SealDirectoryKind;
 
 namespace BuildXL.Engine.DirectGraph
 {
+    public delegate bool PipConstructionHelperResolver(string moduleName, string symbol, out PipConstructionHelper helper, out string error);
+    public delegate bool TryRegisterExport(string moduleName, FileOrDirectoryArtifact artifact, out string error);
+
     /// <summary>An explicit native construction operation, independent of transport IDs.</summary>
     public abstract class DirectGraphOperation
     {

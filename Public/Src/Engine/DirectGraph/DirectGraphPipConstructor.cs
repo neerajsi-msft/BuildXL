@@ -13,6 +13,7 @@ using BuildXL.Utilities.Collections;
 using BuildXL.Utilities.Configuration;
 using BuildXL.Utilities.Core;
 using BuildXL.Utilities.Instrumentation.Common;
+using BuildXL.Engine.DirectGraph.Tracing;
 using NativeSealKind = BuildXL.Pips.Operations.SealDirectoryKind;
 
 namespace BuildXL.Engine.DirectGraph
@@ -30,11 +31,13 @@ namespace BuildXL.Engine.DirectGraph
         private readonly PipConstructionHelperResolver m_getHelper;
         private readonly TryRegisterExport m_export;
         private readonly CounterCollection<DirectGraphCounter> m_counters;
+        private readonly LoggingContext m_loggingContext;
+        private readonly bool m_traceOperation;
 
         public DirectGraphPipConstructor(PathTable pathTable, IMutablePipGraph graph,
             ISandboxConfiguration sandbox, Func<ProcessBuilder> createProcess,
             PipConstructionHelperResolver getHelper, TryRegisterExport registerExport,
-            CounterCollection<DirectGraphCounter> counters = null)
+            CounterCollection<DirectGraphCounter> counters = null, LoggingContext loggingContext = null, bool traceOperation = false)
         {
             m_paths = pathTable;
             m_graph = graph;
@@ -43,6 +46,8 @@ namespace BuildXL.Engine.DirectGraph
             m_getHelper = getHelper;
             m_export = registerExport;
             m_counters = counters ?? new CounterCollection<DirectGraphCounter>();
+            m_loggingContext = loggingContext;
+            m_traceOperation = traceOperation && loggingContext != null;
         }
 
         public DirectGraphConstructionResult Construct(DirectGraphOperation operation) => Construct(operation, null, countOperation: true);
@@ -86,15 +91,16 @@ namespace BuildXL.Engine.DirectGraph
 
         private DirectGraphConstructionResult ConstructCore(DirectGraphOperation operation, PipConstructionHelper helper)
         {
+            if (m_traceOperation)
+            {
+                Logger.Log.GraphOperationReceived(m_loggingContext, $"{operation.GetType().Name} {operation.Module}/{operation.Symbol}");
+            }
             try
             {
-                if (operation is DirectGraphExport export)
+                if (operation is not DirectGraphExport) helper ??= ResolveHelper(operation.Module, operation.Symbol);
+                var result = operation switch
                 {
-                    return AddExport(export);
-                }
-                helper ??= ResolveHelper(operation.Module, operation.Symbol);
-                return operation switch
-                {
+                    DirectGraphExport export => AddExport(export),
                     DirectGraphProcess process => AddProcess(process, helper),
                     DirectGraphWriteFile write => AddWriteFile(write, helper),
                     DirectGraphCopyFile copy => AddCopyFile(copy, helper),
@@ -102,6 +108,12 @@ namespace BuildXL.Engine.DirectGraph
                     DirectGraphCompositeDirectory compose => AddComposite(compose, helper),
                     _ => throw new DirectGraphInvalidRequestException("The graph operation is not specified."),
                 };
+                if (m_traceOperation)
+                {
+                    Logger.Log.GraphOperationResponse(m_loggingContext,
+                        $"{operation.Module}/{operation.Symbol}: {result.Files.Length} files, {result.Directories.Length} directories, semi-stable hash {result.SemiStableHash:X16}");
+                }
+                return result;
             }
             catch (Exception exception) when (exception is not (OperationCanceledException or DirectGraphInvalidRequestException or DirectGraphConstructionException))
             {
@@ -142,10 +154,12 @@ namespace BuildXL.Engine.DirectGraph
             }
             if (request.Arguments.IsValid)
             {
-                foreach (var fragment in request.Arguments)
+                if (request.Arguments.FragmentEscaping == PipDataFragmentEscaping.CRuntimeArgumentRules &&
+                    request.Arguments.FragmentSeparator == StringId.Create(m_paths.StringTable, " "))
                 {
-                    builder.ArgumentsBuilder.Add(fragment);
+                    foreach (var fragment in request.Arguments) builder.ArgumentsBuilder.Add(fragment);
                 }
+                else builder.ArgumentsBuilder.Add(request.Arguments);
             }
             foreach (var file in request.InputFiles)
             {

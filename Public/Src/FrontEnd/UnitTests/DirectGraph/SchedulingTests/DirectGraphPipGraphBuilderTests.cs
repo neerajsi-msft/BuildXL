@@ -14,6 +14,7 @@ using BuildXL.Pips.Builders;
 using BuildXL.Pips.Graph;
 using BuildXL.Pips.Operations;
 using BuildXL.Utilities.Core;
+using BuildXL.Utilities;
 using BuildXL.Utilities.Instrumentation.Common;
 using Test.BuildXL.TestUtilities;
 using Test.BuildXL.TestUtilities.Xunit;
@@ -106,7 +107,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 Root = m_root,
                 GraphFiles = new[] { m_root.Combine(m_context.PathTable, "graph.dg") },
             };
-            var loader = new DirectGraphTextLoader(m_context.PathTable, m_graphBuilder,
+            var loader = new DirectGraphTextLoader(m_context.PathTable, m_graphBuilder.PipConstructor,
                 new DirectGraphTextLoader.SharedState(m_context.PathTable, new[] { project }));
             loader.LoadProjectAsync(project,
                 new Dictionary<DirectGraphProject, global::BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver.ProjectGraphOutputs>(),
@@ -142,31 +143,124 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Fact]
-        public void StructuredArgumentsCannotSilentlyOverrideWireArguments()
+        public void TextAndWireProcessesHaveIdenticalNativeDataAndFingerprints()
         {
-            var request = NewProcess("ambiguous", "out.txt");
-            request.Arguments.Add(Text("wire"));
-            var operation = new GraphOperation { OperationId = 1, AddProcess = request, ProtocolVersion = DirectGraphProtocol.Version };
-            var arguments = PipDataBuilder.CreatePipData(m_context.StringTable, " ", PipDataFragmentEscaping.CRuntimeArgumentRules, "text");
-            var response = m_graphBuilder.HandleOperationAsync(operation, arguments, CancellationToken.None).GetAwaiter().GetResult();
-            Assert.Equal(GraphOperationResponseStatus.InvalidRequest, response.Status);
-            Assert.Contains("no wire-format arguments", response.Error);
+            var request = NewProcess("equivalent", "out.txt");
+            request.Arguments.Add(new[] { Text("-c"), Text("echo \"a b\""), Text("") });
+            request.InputFiles.Add(new FileArtifactReference { SourcePath = Path("in.txt") });
+            request.EnvironmentVariables.Add(new EnvironmentVariableEntry { Name = Text("TRACKED"), Value = Text("value") });
+            request.EnvironmentVariables.Add(new EnvironmentVariableEntry { Name = Text("PASSTHROUGH"), IsPassThrough = true });
+            request.Options = new ProcessOptions { KeepOutputsWritable = true };
+            request.EnableTempDirectory = true;
+            request.Semaphores.Add(new ProcessSemaphore { Name = Text("resource"), Limit = 2, IncrementBy = 1 });
+            Assert.Equal(GraphOperationResponseStatus.Success, Send(new GraphOperation { OperationId = 1, AddProcess = request }).Status);
+            var wire = ProcessOf("equivalent");
+            var graph = new TestEnv.TestPipGraph();
+            var core = CreateNativeConstructor(graph);
+            var settings = new global::BuildXL.Utilities.Configuration.Mutable.DirectGraphProjectSettings
+            {
+                Name = PathAtom.Create(m_context.StringTable, TestModule),
+                Root = m_root,
+                GraphFiles = new[] { m_root.Combine(m_context.PathTable, "equivalent.dg") },
+            };
+            var loader = new DirectGraphTextLoader(m_context.PathTable, core,
+                new DirectGraphTextLoader.SharedState(m_context.PathTable, new[] { settings }));
+            loader.LoadProjectAsync(settings,
+                new Dictionary<DirectGraphProject, global::BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver.ProjectGraphOutputs>(),
+                _ => new StringReader("""
+                    directgraph 2
+                    path 0 "tool.exe"
+                    path 1 "."
+                    path 2 "out.txt"
+                    path 3 "in.txt"
+                    string 0 "-c"
+                    string 1 "echo \"a b\""
+                    string 2 ""
+                    string 3 "TRACKED"
+                    string 4 "value"
+                    string 5 "PASSTHROUGH"
+                    string 6 "resource"
+                    process equivalent
+                      executable $p0
+                      workingDirectory $p1
+                      argument $s0
+                      argument $s1
+                      argument $s2
+                      input $p3
+                      environment $s3 $s4
+                      passthroughEnvironment $s5
+                      semaphore $s6 2 1
+                      enableTempDirectory true
+                      option keepOutputsWritable
+                      output $p2
+                    """), _ => true, CancellationToken.None).GetAwaiter().GetResult();
+            var text = Assert.Single(graph.RetrieveScheduledPips().OfType<Process>());
+            Assert.Equal(wire.Arguments, text.Arguments);
+            Assert.Equal(wire.Arguments.ToString(m_context.PathTable), text.Arguments.ToString(m_context.PathTable));
+            Assert.Equal(wire.EnvironmentVariables.ToArray(), text.EnvironmentVariables.ToArray());
+            Assert.Equal(wire.Dependencies.ToArray(), text.Dependencies.ToArray());
+            Assert.Equal(wire.FileOutputs.ToArray(), text.FileOutputs.ToArray());
+            Assert.Equal(wire.TempDirectory, text.TempDirectory);
+            Assert.Equal(wire.StandardDirectory, text.StandardDirectory);
+            Assert.Equal(wire.SemiStableHash, text.SemiStableHash);
+            var fingerprinter = new PipStaticFingerprinter(m_context.PathTable, extraFingerprintSalts: ExtraFingerprintSalts.Default());
+            Assert.Equal(fingerprinter.ComputeWeakFingerprint(wire), fingerprinter.ComputeWeakFingerprint(text));
         }
 
         [Fact]
-        public void StructuredContentCannotSilentlyOverrideWireContent()
+        public void NativeAndWireWriteFileContentHaveIdenticalFingerprints()
         {
-            var operation = new GraphOperation
+            const string value = "content\r\n\"unicode \u00e9\"";
+            var request = new AddWriteFileRequest { Module = TestModule, Symbol = "write", Destination = Path("out.txt"), Content = Text(value) };
+            Assert.Equal(GraphOperationResponseStatus.Success, Send(new GraphOperation { OperationId = 1, AddWriteFile = request }).Status);
+            var graph = new TestEnv.TestPipGraph();
+            var core = CreateNativeConstructor(graph);
+            core.Construct(new DirectGraphWriteFile
             {
-                OperationId = 1,
-                ProtocolVersion = DirectGraphProtocol.Version,
-                AddWriteFile = new AddWriteFileRequest { Content = Text("wire") },
-            };
-            var content = PipDataBuilder.CreatePipData(m_context.StringTable, string.Empty, PipDataFragmentEscaping.NoEscaping, "text");
-            var response = m_graphBuilder.HandleOperationAsync(operation, content, CancellationToken.None).GetAwaiter().GetResult();
-            Assert.Equal(GraphOperationResponseStatus.InvalidRequest, response.Status);
-            Assert.Contains("no wire-format content", response.Error);
+                Module = TestModule, Symbol = "write",
+                Destination = m_root.Combine(m_context.PathTable, "out.txt"),
+                Content = PipDataBuilder.CreatePipData(m_context.StringTable, "", PipDataFragmentEscaping.NoEscaping, value),
+            });
+            var wire = Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<WriteFile>());
+            var native = Assert.Single(graph.RetrieveScheduledPips().OfType<WriteFile>());
+            Assert.Equal(wire.Contents, native.Contents);
+            Assert.Equal(wire.SemiStableHash, native.SemiStableHash);
+            var fingerprinter = new PipStaticFingerprinter(m_context.PathTable, extraFingerprintSalts: ExtraFingerprintSalts.Default());
+            Assert.Equal(fingerprinter.ComputeWeakFingerprint(wire), fingerprinter.ComputeWeakFingerprint(native));
         }
+
+        [Fact]
+        public void NativeArgumentDataRetainsNonstandardRootEscapingAndSeparator()
+        {
+            var graph = new TestEnv.TestPipGraph();
+            var data = PipDataBuilder.CreatePipData(m_context.StringTable, "|", PipDataFragmentEscaping.NoEscaping, "a b", "\"quoted\"");
+            CreateNativeConstructor(graph).Construct(new DirectGraphProcess
+            {
+                Module = TestModule, Symbol = "native",
+                Executable = FileArtifact.CreateSourceFile(m_root.Combine(m_context.PathTable, "tool")),
+                WorkingDirectory = m_root,
+                Arguments = data,
+            });
+            var actual = Assert.Single(graph.RetrieveScheduledPips().OfType<Process>()).Arguments;
+            var nested = Assert.Single(actual).GetNestedFragmentValue();
+            Assert.Equal(data.FragmentSeparator, nested.FragmentSeparator);
+            Assert.Equal(data.FragmentEscaping, nested.FragmentEscaping);
+            Assert.Equal(data.Select(fragment => fragment.GetStringIdValue()), nested.Select(fragment => fragment.GetStringIdValue()));
+            Assert.Equal("a b|\"quoted\"", actual.ToString(m_context.PathTable));
+        }
+
+        private DirectGraphPipConstructor CreateNativeConstructor(TestEnv.TestPipGraph graph) =>
+            new(m_context.PathTable, graph, m_sandboxConfiguration,
+                () => ProcessBuilder.CreateForTesting(m_context.PathTable, new NoOpCredentialScanner(), new LoggingContext("Test")),
+                (string module, string symbol, out PipConstructionHelper helper, out string error) =>
+                {
+                    helper = PipConstructionHelper.CreateForTesting(m_context, objectRoot: m_root,
+                        redirectedRoot: m_root.Combine(m_context.PathTable, "redirected"), pipGraph: graph,
+                        moduleName: module, symbol: symbol, specPath: m_root.Combine(m_context.PathTable, "spec.dsc"));
+                    error = null;
+                    return true;
+                },
+                (string module, FileOrDirectoryArtifact artifact, out string error) => { error = null; return true; });
 
         [Fact]
         public void EveryPipKindIsConstructedAndCarriesItsOwnProvenance()

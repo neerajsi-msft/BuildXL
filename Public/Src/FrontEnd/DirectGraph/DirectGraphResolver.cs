@@ -344,7 +344,11 @@ namespace BuildXL.FrontEnd.DirectGraph
         }
 
         private DirectGraphPipGraphBuilder CreateGraphBuilder() =>
-            new DirectGraphPipGraphBuilder(
+            new DirectGraphPipGraphBuilder(m_context.PathTable, CreatePipConstructor(), m_context.LoggingContext,
+                m_resolverSettings.EnableProjectGraphVerboseLogging ?? false, m_counters);
+
+        private DirectGraphPipConstructor CreatePipConstructor(bool traceOperations = false) =>
+            new DirectGraphPipConstructor(
                 m_context.PathTable,
                 m_host.PipGraph,
                 m_host.Configuration.Sandbox,
@@ -355,11 +359,9 @@ namespace BuildXL.FrontEnd.DirectGraph
                     m_context.LoggingContext),
                 TryGetPipConstructionHelper,
                 TryRegisterExport,
-                m_context.LoggingContext,
-                // Tracing runs the protobuf text formatter over every request and every response and logs the result,
-                // so it cannot be on unconditionally.
-                traceOperation: m_resolverSettings.EnableProjectGraphVerboseLogging ?? false,
-                counters: m_counters);
+                counters: m_counters,
+                loggingContext: m_context.LoggingContext,
+                traceOperation: traceOperations && (m_resolverSettings.EnableProjectGraphVerboseLogging ?? false));
 
         private async Task<bool> ConstructTextGraphAsync()
         {
@@ -370,7 +372,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                 var constructor = new DirectGraphProjectGraphConstructor(
                     m_context.PathTable,
                     m_resolverSettings.Projects,
-                    state => new DirectGraphTextLoader(m_context.PathTable, CreateGraphBuilder(), state),
+                    state => new DirectGraphTextLoader(m_context.PathTable, CreatePipConstructor(traceOperations: true), state),
                     path =>
                     {
                         m_host.Engine.RecordFrontEndFile(path, Name);

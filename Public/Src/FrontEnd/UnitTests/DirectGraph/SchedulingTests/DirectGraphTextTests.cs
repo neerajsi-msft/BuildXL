@@ -56,13 +56,20 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         private PathTable m_paths => m_context.PathTable;
         private readonly TestEnv.TestPipGraph m_pipGraph = new();
         private readonly Dictionary<(string Module, string Symbol), PipConstructionHelper> m_helpers = new();
-        private readonly Dictionary<string, DirectGraphPipGraphBuilder> m_builders = new();
         private IReadOnlyDictionary<DirectGraphProject, ProjectGraphOutputs> m_outputs;
         private readonly string m_root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "directgraph-text-tests"));
         private readonly Dictionary<AbsolutePath, string> m_text = new();
-        private readonly List<GraphOperation> m_operations = new();
-        private readonly List<PipData> m_data = new();
+        private readonly List<CapturedOperation> m_operations = new();
         private readonly List<AbsolutePath> m_opened = new();
+        private sealed record CapturedOperation(DirectGraphOperation Native)
+        {
+            public DirectGraphProcess AddProcess => Native as DirectGraphProcess;
+            public DirectGraphWriteFile AddWriteFile => Native as DirectGraphWriteFile;
+            public DirectGraphCopyFile AddCopyFile => Native as DirectGraphCopyFile;
+            public DirectGraphSealDirectory AddSealDirectory => Native as DirectGraphSealDirectory;
+            public DirectGraphCompositeDirectory AddCompositeSharedOpaqueDirectory => Native as DirectGraphCompositeDirectory;
+            public DirectGraphExport AddExport => Native as DirectGraphExport;
+        }
 
         [Fact]
         public void RendererExpandsChunksAndSetsButPreservesArgumentsPathsAndLineEndings()
@@ -215,7 +222,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Throws<InvalidDataException>(() => new DirectGraphTextReader(new StringReader(text), "bad.dg").Read().ToArray());
 
         [Fact]
-        public async Task FragmentLocalIdsRemapToDenseStreamRegistrations()
+        public async Task FragmentLocalIdsResolveToNativeArtifactsAndStrings()
         {
             var project = Project("p", """
                 directgraph 2
@@ -239,14 +246,12 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                   destination $p2
                 """);
             await Load(new[] { project });
-            var paths = m_operations.SelectMany(operation => operation.NewPaths).ToArray();
-            var strings = m_operations.SelectMany(operation => operation.NewStrings).ToArray();
-            Assert.Equal(new[] { Absolute("out/a").ToString(m_paths), Absolute("out/b").ToString(m_paths), Absolute("out/c").ToString(m_paths) },
-                paths.Select(registration => registration.Value));
-            Assert.Equal(new uint[] { 0, 1, 2 }, paths.Select(registration => registration.Id));
-            Assert.Equal(new[] { "first", "second" }, strings.Select(registration => registration.Value));
-            Assert.Equal(new uint[] { 0, 1 }, strings.Select(registration => registration.Id));
-            Assert.Equal(1UL, m_operations.Single(operation => operation.AddCopyFile != null).AddCopyFile.Source.ProducedFile.ProducerOperationId);
+            var writes = m_operations.Where(operation => operation.AddWriteFile != null).Select(operation => operation.AddWriteFile).ToArray();
+            Assert.Equal(new[] { Absolute("out/a"), Absolute("out/b") }, writes.Select(write => write.Destination));
+            Assert.Equal(new[] { "first", "second" }, writes.Select(write => write.Content.ToString(m_paths)));
+            var copy = m_operations.Single(operation => operation.AddCopyFile != null).AddCopyFile;
+            Assert.Equal(Absolute("out/a"), copy.Source.Path);
+            Assert.Equal(1, copy.Source.RewriteCount);
         }
 
         [Fact]
@@ -274,8 +279,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 """);
             await Load(new[] { project });
             var operation = Assert.Single(m_operations.Where(operation => operation.AddProcess != null));
-            Assert.Empty(operation.AddProcess.Arguments);
-            var arguments = m_data[m_operations.IndexOf(operation)];
+            var arguments = Assert.Single(operation.AddProcess.Arguments).GetNestedFragmentValue();
             var expected = PipDataBuilder.CreatePipData(m_paths.StringTable, " ", PipDataFragmentEscaping.CRuntimeArgumentRules,
                 "-c", "  echo\t'$HOME \"quoted\"'\\\n`backtick`''\"\"  echo\t", "");
             Assert.Equal(expected.ToString(m_paths), arguments.ToString(m_paths));
@@ -304,8 +308,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 """);
             await Load(new[] { project });
             var operation = Assert.Single(m_operations.Where(operation => operation.AddWriteFile != null));
-            Assert.False(operation.AddWriteFile.HasContent);
-            var content = m_data[m_operations.IndexOf(operation)];
+            var content = operation.AddWriteFile.Content;
             Assert.Equal("echo \t'\"`$HOME\\'\r\n\u00e9 \techo", content.ToString(m_paths));
             Assert.Equal(content.First().GetStringIdValue(), content.Last().GetStringIdValue());
         }
@@ -346,8 +349,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             var copy = Assert.Single(m_operations.Where(operation => operation.AddCopyFile != null)).AddCopyFile;
             Assert.Equal(
                 m_outputs.Single(pair => pair.Key.Name == "producer").Value.Files[Absolute("out/a")],
-                m_builders["consumer"].GetProducedFile(copy.Source.ProducedFile.ProducerOperationId, Absolute("out/a"), out _));
-            Assert.NotNull(m_operations.Last().Complete);
+                copy.Source);
         }
 
         [Theory]
@@ -415,10 +417,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Equal(2, rewritten.RewriteCount);
             Assert.Contains(rewritten, processes[1].Dependencies);
             Assert.Contains(processes[0].PipId, processes[1].OrderDependencies);
-            Assert.NotSame(m_builders["producer"], m_builders["consumer"]);
-            Assert.True(m_builders.Values.All(builder => builder.IsComplete));
-            Assert.Equal(m_operations.First(operation => operation.AddWriteFile != null).OperationId,
-                m_operations.Single(operation => operation.AddProcess?.Symbol == "consume").OperationId);
+            Assert.Contains(rewritten, m_operations.Single(operation => operation.AddProcess?.Symbol == "consume").AddProcess.InputFiles);
         }
 
         [Theory]
@@ -536,8 +535,8 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             var copy = Assert.Single(m_operations.Where(operation => operation.AddCopyFile != null)).AddCopyFile;
             Assert.Equal(
                 m_outputs.Single(pair => pair.Key.Name == "producer").Value.Directories[Absolute("out/include")].Contents[0],
-                m_builders["consumer"].GetProducedFile(copy.Source.ProducedFile.ProducerOperationId, Absolute("out/include/a.h"), out _));
-            Assert.Equal(3UL, m_operations.Single(operation => operation.AddExport != null).OperationId);
+                copy.Source);
+            Assert.Single(m_operations.Where(operation => operation.AddExport != null));
         }
 
         [Fact]
@@ -599,7 +598,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             var consumer = Project("consumer", "directgraph 2\npath 0 \"" + path + "\"\npath 1 \"out/b\"\ncopyFile c\n  source $p0\n  destination $p1", "sources");
             await Load(new[] { consumer, sources });
             var copy = Assert.Single(m_operations.Where(operation => operation.AddCopyFile != null)).AddCopyFile;
-            Assert.Equal(FileArtifactReference.ReferenceOneofCase.SourcePath, copy.Source.ReferenceCase);
+            Assert.True(copy.Source.IsSourceFile);
         }
 
         [Theory]
@@ -696,8 +695,10 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 """);
             await Load(new[] { project });
             var process = m_operations.Single(operation => operation.AddProcess != null).AddProcess;
-            Assert.Equal(1UL, process.Executable.ProducedFile.ProducerOperationId);
-            Assert.Equal(1UL, Assert.Single(process.OrderOnlyInputs).ProducedFile.ProducerOperationId);
+            Assert.Equal(Absolute("out/tool"), process.Executable.Path);
+            Assert.Equal(1, process.Executable.RewriteCount);
+            Assert.Equal(process.Executable, Assert.Single(process.OrderOnlyInputs).File);
+            Assert.True(Assert.Single(process.OrderOnlyInputs).Producer.IsValid);
         }
 
         [Theory]
@@ -761,7 +762,8 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             }
             await Load(new[] { project });
             var consumer = m_operations.Single(operation => operation.AddProcess?.Symbol == "consume").AddProcess;
-            Assert.Equal(2UL, Assert.Single(consumer.InputDirectories).ProducerOperationId);
+            Assert.Equal(m_pipGraph.RetrieveScheduledPips().OfType<Process>().First().DirectoryOutputs[0],
+                Assert.Single(consumer.InputDirectories));
             Assert.Empty(consumer.InputFiles);
         }
 
@@ -801,7 +803,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             await Load(new[] { consumer, producer });
             var request = m_operations.Single(operation => operation.AddProcess?.Symbol == "consume").AddProcess;
             var reference = Assert.Single(request.InputFiles);
-            Assert.Equal(FileArtifactReference.ReferenceOneofCase.ProducedFile, reference.ReferenceCase);
+            Assert.True(reference.IsOutputFile);
             var processes = m_pipGraph.RetrieveScheduledPips().OfType<Process>().ToArray();
             Assert.Contains(Assert.Single(processes[0].FileOutputs).ToFileArtifact(), processes[1].Dependencies);
             Assert.Single(request.InputDirectories);
@@ -892,11 +894,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }, reject: operation =>
             {
                 sent++;
-                return new GraphOperationResponse
-                {
-                    Status = GraphOperationResponseStatus.GraphError,
-                    Error = "pip validation rejected",
-                };
+                throw new DirectGraphConstructionException("pip validation rejected");
             }));
             Assert.Contains("pip validation rejected", error.Message);
             Assert.Equal(1, sent);
@@ -1350,7 +1348,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {
                         lock (m_operations)
                         {
-                            Assert.True(m_builders["provider"].IsComplete);
+                            Assert.Contains(m_operations, operation => operation.AddExport?.Module == "provider");
                         }
                         consumerStarted.Set();
                     }
@@ -1440,36 +1438,31 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
 
         private async Task Load(
             IReadOnlyList<IDirectGraphProjectSettings> projects, string[] roots = null, Func<AbsolutePath, bool> probe = null,
-            Func<GraphOperation, GraphOperationResponse> reject = null, int maxConcurrency = 1,
-            Action<GraphOperation> beforeSend = null, Action<AbsolutePath> beforeOpen = null)
+            Action<CapturedOperation> reject = null, int maxConcurrency = 1,
+            Action<CapturedOperation> beforeSend = null, Action<AbsolutePath> beforeOpen = null)
         {
             var selected = DirectGraphProject.Create(projects, roots, m_paths);
             var constructor = new DirectGraphProjectGraphConstructor(m_paths, projects, state =>
                 {
-                    var builder = new DirectGraphPipGraphBuilder(
+                    var core = new DirectGraphPipConstructor(
                         m_paths, m_pipGraph, new SandboxConfiguration(),
                         () => ProcessBuilder.CreateForTesting(m_paths, new NoOpCredentialScanner(), new LoggingContext("Test")),
                         TryGetHelper,
                         (string module, FileOrDirectoryArtifact artifact, out string error) => { error = null; return true; },
-                        new LoggingContext("Test"), traceOperation: false);
-                    return new DirectGraphTextLoader(m_paths, builder, state, (operation, data, token) =>
+                        counters: null);
+                    return new DirectGraphTextLoader(m_paths, core, state, (native, token) =>
                     {
+                        var operation = new CapturedOperation(native);
                         beforeSend?.Invoke(operation);
-                        string module = operation.AddProcess?.Module ?? operation.AddWriteFile?.Module ?? operation.AddCopyFile?.Module ??
-                            operation.AddSealDirectory?.Module ?? operation.AddCompositeSharedOpaqueDirectory?.Module ?? operation.AddExport?.Module;
                         lock (m_operations)
                         {
-                            if (module != null)
-                            {
-                                m_builders[module] = builder;
-                            }
                             m_operations.Add(operation);
-                            m_data.Add(data);
                         }
                         // TestPipGraph allocates IDs from its queue count, unlike the real concurrent PipGraph.Builder.
                         lock (m_pipGraph)
                         {
-                            return reject == null ? builder.HandleOperationAsync(operation, data, token) : Task.FromResult(reject(operation));
+                            reject?.Invoke(operation);
+                            return Task.FromResult(core.Construct(native));
                         }
                     });
                 },
