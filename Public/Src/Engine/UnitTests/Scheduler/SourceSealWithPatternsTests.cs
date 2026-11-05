@@ -237,33 +237,6 @@ namespace Test.BuildXL.Scheduler
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public void CachedHashesPreservePolicyValueEquality(bool topOnly)
-        {
-            var pt = new PathTable();
-            var root = AbsolutePath.Create(pt, X("/c/source"));
-            var patterns = ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.h"), StringId.Create(pt.StringTable, "*.c") });
-            var excluded = RelativePath.Create(pt.StringTable, ".git");
-            var first = new SourceSealWithPatterns(root, patterns, topOnly,
-                new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { excluded })));
-            var equivalent = new SourceSealWithPatterns(root,
-                ReadOnlyArray<StringId>.From(new[] { patterns[0], patterns[1] }), topOnly,
-                new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { excluded })));
-            Assert.Equal(first, equivalent);
-            Assert.Equal(first.GetHashCode(), equivalent.GetHashCode());
-            Assert.NotEqual(first, new SourceSealWithPatterns(root, patterns, !topOnly, first.Exclusions));
-            Assert.NotEqual(first, new SourceSealWithPatterns(root,
-                ReadOnlyArray<StringId>.From(new[] { patterns[1], patterns[0] }), topOnly, first.Exclusions));
-            Assert.NotEqual(default(SourceSealWithPatterns), first);
-
-            var normalized = new SourceSealWithPatterns(root, default, topOnly);
-            var empty = new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, topOnly, SourceSealExclusions.Empty);
-            Assert.Equal(normalized, empty);
-            Assert.Equal(normalized.GetHashCode(), empty.GetHashCode());
-        }
-
-        [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
         public void LookupCachePreservesBoundariesPatternsAndProbeFlags(bool reverse)
         {
             var pt = new PathTable();

@@ -422,9 +422,8 @@ semantics; they do not establish baseline compatibility.
   per-project seal reuse. Defer cross-project seal-pip/artifact deduplication
   unless profiling shows worthwhile construction or serialized-graph overhead.
   It is not a correctness requirement or an integration prerequisite.
-- Cache immutable `SourceSealWithPatterns` value hashes at construction; default
-  values retain zero hashes and invalid-path equality. On x64 the cached integer
-  increases the struct from 24 to 32 bytes, including elements of policy arrays.
+- Do not cache `SourceSealWithPatterns` hashes: Release measurements showed no
+  benefit, while the cached integer grew the x64 struct from 24 to 32 bytes.
   Memoize source-seal policies by seal PipId in the pip table's index cache,
   shared by graph validation, observed-input misses and scheduler/affected-input
   readers. The memo is thread-safe, performs no hydration, and is rebuilt lazily
