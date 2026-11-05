@@ -270,6 +270,16 @@ namespace BuildXL.Scheduler.Artifacts
             IFileContentManagerHost host,
             IOperationTracker operationTracker,
             ITempCleaner tempDirectoryCleaner = null)
+            : this(host, operationTracker, tempDirectoryCleaner, sourceSealDirectoryIndices: null)
+        {
+        }
+
+        /// <summary>Creates a manager reusing the consuming graph's source-policy cache.</summary>
+        public FileContentManager(
+            IFileContentManagerHost host,
+            IOperationTracker operationTracker,
+            ITempCleaner tempDirectoryCleaner,
+            SourceSealDirectoryIndex.Cache sourceSealDirectoryIndices)
         {
             m_host = host;
             ArtifactContentCache = new ElidingArtifactContentCacheWrapper(host.ArtifactContentCache);
@@ -282,7 +292,7 @@ namespace BuildXL.Scheduler.Artifacts
                 m_outputMaterializationExclusionMap.TryAdd(outputMaterializationExclusionRoot.Value, Unit.Void);
             }
 
-            SourceChangeAffectedInputs = new SourceChangeAffectedInputs(this);
+            SourceChangeAffectedInputs = new SourceChangeAffectedInputs(this, sourceSealDirectoryIndices);
             m_recoverContentActionBlock = new ResultBasedActionBlockSlim<bool>(
                 // The concurrency level is set to 2x the number of processors to allow for some oversubcribed parallelism, but not too much that can
                 // degrade performance due to oversubcription in the thread pool.

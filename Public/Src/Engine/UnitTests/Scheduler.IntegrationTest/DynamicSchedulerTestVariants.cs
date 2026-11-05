@@ -108,6 +108,18 @@ namespace Test.BuildXL.Scheduler.DynamicGraph
     public class DynamicChangeAffectedInputTests : ChangeAffectedInputTests
     {
         public DynamicChangeAffectedInputTests(ITestOutputHelper output) : base(output) => EnableDynamicGraphScheduler();
+
+        [Theory(Skip = "The inherited theory includes undeclared source reads, which are unsupported by the dynamic scheduler.")]
+        public override void AffectedSourceMembersUseTheWholeConsumingPolicy(bool allowUndeclaredReads)
+        {
+            base.AffectedSourceMembersUseTheWholeConsumingPolicy(allowUndeclaredReads);
+        }
+
+        [Fact]
+        public void AffectedSourceMembersUseTheWholeConsumingPolicyWithoutUndeclaredReads()
+        {
+            base.AffectedSourceMembersUseTheWholeConsumingPolicy(allowUndeclaredReads: false);
+        }
     }
 
     public class DynamicDependencyViolationTests : DependencyViolationTests

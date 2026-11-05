@@ -41,14 +41,22 @@ namespace BuildXL.Scheduler.ChangeAffectedOutput
         private readonly HashSet<AbsolutePath> m_initialSourceChanges = new HashSet<AbsolutePath>();
 
         /// <summary>
-        /// Mappings from source seal directory to their affected members.
+        /// Affected implicit members are cached by complete per-pip policy, not by an individual seal.
         /// </summary>
-        private readonly ConcurrentDictionary<DirectoryArtifact, List<AbsolutePath>> m_sourceSealDirectoryAffectedMembers = new ConcurrentDictionary<DirectoryArtifact, List<AbsolutePath>>();
+        private readonly ConcurrentDictionary<SourceSealDirectoryIndex, List<AbsolutePath>> m_sourcePolicyAffectedMembers = new();
+        private readonly SourceSealDirectoryIndex.Cache m_sourceSealDirectoryIndices;
 
         /// <nodoc />
         public SourceChangeAffectedInputs(FileContentManager fileContentManager)
+            : this(fileContentManager, null)
+        {
+        }
+
+        /// <nodoc />
+        public SourceChangeAffectedInputs(FileContentManager fileContentManager, SourceSealDirectoryIndex.Cache sourceSealDirectoryIndices)
         {
             m_fileContentManager = fileContentManager;
+            m_sourceSealDirectoryIndices = sourceSealDirectoryIndices ?? new SourceSealDirectoryIndex.Cache();
         }
 
         /// <summary>
@@ -91,17 +99,36 @@ namespace BuildXL.Scheduler.ChangeAffectedOutput
                         changeAffectedInputs.Add(file.Path);
                     }
                 }
-
-                if (m_fileContentManager.Host.TryGetSourceSealDirectory(directory, out var sourceSealWithPatterns))
-                {
-                    var affectedMembers = m_sourceSealDirectoryAffectedMembers.GetOrAdd(
-                        directory,
-                        d => new List<AbsolutePath>(m_initialSourceChanges.Where(p => sourceSealWithPatterns.Contains(PathTable, p))));
-                    changeAffectedInputs.AddRange(affectedMembers);
-                }
             }
 
+            var index = m_sourceSealDirectoryIndices.TryGet(process.PipId, out var bound) ? bound :
+                m_sourceSealDirectoryIndices.GetOrAdd(PathTable, GetSourcePolicies(process), process.PipId);
+            if (process.ProcessAllowsUndeclaredSourceReads || !index.IsValid)
+            {
+                // Undeclared-read grants are independent of seals and can authorize excluded or uncovered paths.
+                // Without observations here, retain a conservative superset rather than reinterpret those grants.
+                changeAffectedInputs.AddRange(m_initialSourceChanges);
+            }
+            else if (!index.IsEmpty)
+            {
+                // Access flags are unavailable here, so keep possible exact excluded-boundary probes.
+                var affectedMembers = m_sourcePolicyAffectedMembers.GetOrAdd(index,
+                    policy => new List<AbsolutePath>(m_initialSourceChanges.Where(path =>
+                        policy.Match(PathTable, path, allowExactExcludedProbe: true) is SourceSealMatch.Included or SourceSealMatch.Root)));
+                changeAffectedInputs.AddRange(affectedMembers);
+            }
             return ReadOnlyArray<AbsolutePath>.FromWithoutCopy(changeAffectedInputs.ToArray());
+        }
+
+        private IEnumerable<SourceSealWithPatterns> GetSourcePolicies(Process process)
+        {
+            foreach (var directory in process.DirectoryDependencies)
+            {
+                if (m_fileContentManager.Host.TryGetSourceSealDirectory(directory, out var policy))
+                {
+                    yield return policy;
+                }
+            }
         }
 
         /// <summary>

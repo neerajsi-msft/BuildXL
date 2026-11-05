@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using BuildXL.Pips.Builders;
 using BuildXL.Pips.Operations;
+using BuildXL.Utilities.Collections;
 using BuildXL.Utilities.Core;
 using Test.BuildXL.Executables.TestProcess;
 using Test.BuildXL.Scheduler;
@@ -446,6 +447,76 @@ namespace IntegrationTest.BuildXL.Scheduler
 
             var actualAffectedInput = File.ReadAllText(changeAffectedWrittenFile.ToString(Context.PathTable));
             XAssert.AreEqual(expectedAffectedInput, actualAffectedInput);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public virtual void AffectedSourceMembersUseTheWholeConsumingPolicy(bool allowUndeclaredReads)
+        {
+            var root = CreateUniqueDirectory(SourceRootPath);
+            FileArtifact Source(string relative)
+            {
+                var path = root.Combine(Context.PathTable, RelativePath.Create(Context.StringTable, relative));
+                Directory.CreateDirectory(path.GetParent(Context.PathTable).ToString(Context.PathTable));
+                File.WriteAllText(path.ToString(Context.PathTable), "source");
+                return FileArtifact.CreateSourceFile(path);
+            }
+            var broadFile = Source("file.txt");
+            var included = Source("nested/keep.h");
+            var rejectedPattern = Source("nested/skip.c");
+            var rejectedDepth = Source("nested/deep/file.h");
+            var explicitExcluded = Source(".git/HEAD");
+            var listedExcluded = Source(".git/static.h");
+            var boundaryProbe = Source("excluded-boundary");
+            var changed = new[] { broadFile, included, rejectedPattern, rejectedDepth, explicitExcluded, listedExcluded, boundaryProbe };
+            var excludedSeal = new SealDirectory(root,
+                CollectionUtilities.EmptySortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>(OrdinalFileArtifactComparer.Instance),
+                CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                SealDirectoryKind.SourceAllDirectories, CreateProvenance(),
+                ReadOnlyArray<StringId>.Empty, ReadOnlyArray<StringId>.Empty,
+                sourceExclusions: new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[]
+                    { RelativePath.Create(Context.StringTable, ".git"), RelativePath.Create(Context.StringTable, "excluded-boundary") })));
+            var excluded = PipGraphBuilder.AddSealDirectory(excludedSeal);
+            var sameRootGrant = SealDirectory(root, SealDirectoryKind.SourceAllDirectories);
+            var nested = PipGraphBuilder.AddSealDirectory(CreateSourceSealDirectory(root.Combine(Context.PathTable, "nested"),
+                SealDirectoryKind.SourceTopDirectoryOnly, "*.h"));
+            var listed = SealDirectory(root.Combine(Context.PathTable, ".git"), SealDirectoryKind.Partial, listedExcluded);
+
+            AbsolutePath Consumer(bool restrictive)
+            {
+                var writtenList = CreateUniqueObjPath("affected");
+                var builder = CreatePipBuilder(new[]
+                {
+                    Operation.ReadFile(FileArtifact.CreateSourceFile(writtenList), doNotInfer: true),
+                    Operation.WriteFile(CreateOutputFileArtifact()),
+                });
+                builder.AddInputDirectory(excluded);
+                builder.AddInputDirectory(sameRootGrant);
+                if (restrictive)
+                {
+                    builder.AddInputDirectory(nested);
+                    builder.AddInputDirectory(listed);
+                    builder.AddInputFile(explicitExcluded);
+                    if (allowUndeclaredReads) builder.Options |= Process.Options.AllowUndeclaredSourceReads;
+                }
+                builder.SetChangeAffectedInputListWrittenFile(writtenList);
+                SchedulePipBuilder(builder);
+                return writtenList;
+            }
+            var restrictiveList = Consumer(restrictive: true);
+            var broadList = Consumer(restrictive: false);
+            var inputChanges = CreateOutputFileArtifact();
+            File.WriteAllLines(ArtifactToString(inputChanges), changed.Select(file => ArtifactToString(file)));
+            Configuration.Schedule.InputChanges = inputChanges.Path;
+            RunScheduler().AssertSuccess();
+
+            var expectedRestrictive = allowUndeclaredReads ? changed :
+                new[] { broadFile, included, explicitExcluded, listedExcluded, boundaryProbe };
+            Assert.Equal(expectedRestrictive.Select(file => ArtifactToString(file)).OrderBy(path => path, StringComparer.Ordinal),
+                File.ReadAllLines(restrictiveList.ToString(Context.PathTable)).OrderBy(path => path, StringComparer.Ordinal));
+            Assert.Equal(new[] { broadFile, included, rejectedPattern, rejectedDepth, boundaryProbe }.Select(file => ArtifactToString(file)).OrderBy(path => path, StringComparer.Ordinal),
+                File.ReadAllLines(broadList.ToString(Context.PathTable)).OrderBy(path => path, StringComparer.Ordinal));
         }
 
         [Fact]

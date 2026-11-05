@@ -1594,7 +1594,8 @@ namespace BuildXL.Scheduler
             m_pipFragmentRenderer = this.CreatePipFragmentRenderer();
 
             OperationTracker = new OperationTracker(loggingContext, this);
-            m_fileContentManager = new FileContentManager(this, OperationTracker);
+            m_fileContentManager = new FileContentManager(this, OperationTracker, tempDirectoryCleaner: null,
+                sourceSealDirectoryIndices: m_pipTable.SourceSealDirectoryIndices);
             m_apiServer = null;
             m_pluginManager = null;
 
