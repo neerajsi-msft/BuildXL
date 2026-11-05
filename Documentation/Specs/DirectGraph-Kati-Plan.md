@@ -1,7 +1,9 @@
 # BuildXL and Kati tool-change plan
 
 Status: approved and implemented in BuildXL and Kati, including parallel
-project construction under `/maxFrontEndConcurrency`; code reviews complete.
+project construction under `/maxFrontEndConcurrency` and native PipData-based
+construction API extraction. Prior implementation reviews are complete;
+the extraction is ready for retained review.
 Isolated BoB integration, real execution/cache validation and source-seal
 consumer rollout validation remain gated on BoB clearance. Measurement-driven
 optimizations and deletions remain optional. This is an internal working plan;
@@ -35,8 +37,9 @@ the process-only coordinator contract does not represent arbitrary subgraphs.
 Every direct dependency must finish construction and export publication before
 its dependent starts; records within each project remain strictly ordered.
 
-Keep value registrations, operation IDs and producer maps in per-project
-loader/native-builder streams. Synchronize only shared ownership checks/claims
+Keep protocol value registrations, operation IDs and producer maps in each
+gRPC adapter stream only. Text projects bind actual native artifacts and
+PipData directly, with no protocol-ID bookkeeping. Synchronize only shared ownership checks/claims
 and publish finalized artifacts through concurrent tables. Do not hold a global
 lock across parsing, argument construction, existence probes or native pip
 construction. Native graph mutation continues through the same thread-safe
@@ -90,7 +93,7 @@ graph. Tool development uses focused tests and isolated fixtures first.
 | Output ownership | No new machinery required | Clean CI state and a fixed graph exclude the stale-output scenario; retain existing checks. |
 | Fragment and export contract | Direction agreed | Config details deferred to implementation; retain existing resolver selection semantics. |
 | Coarse action fields | Direction agreed after capability audit | Text temp/semaphore support, source-seal exclusion plumbing; acquisition-only controls conditional on text emission. |
-| Efficiency and deletion | Measurement-first scope agreed | Optimize only demonstrated hotspots; defer native API extraction and remove only proven-unused code. |
+| Efficiency and deletion | Native API extraction completed by user direction | Keep further optimizations measurement-driven and remove only proven-unused code. |
 
 ## Tool changes: project policy and artifact linking
 
@@ -136,7 +139,7 @@ use a source seal to represent generated outputs.
 **BuildXL change plan**
 
 - Keep `DirectGraphTextLoader.CreateProcess` translating explicit process fields
-  into the existing `AddProcessRequest` and shared native builder. Do not add
+  into native `DirectGraphProcess` operations and the shared native constructor. Do not add
   automatic project-default application as the assumed implementation.
 - Resolve artifact references against completed dependency exports and earlier
   local declarations, preserving ordinary construction order and actual
@@ -725,7 +728,7 @@ Keep production stitched Ninja, generic project coordination, actual-artifact
 imports, argument factoring, the core source-seal index and external gRPC.
 
 The measurement-first scope is agreed. Do not put speculative parsing/index
-rewrites or native-builder extraction on the integration critical path.
+rewrites on the integration critical path.
 Delete only demonstrably unused code after establishing callers and intended
 use. No measurements or deletions are claimed by this design approval.
 
@@ -745,13 +748,30 @@ use. No measurements or deletions are claimed by this design approval.
   and `KATI_GROUPED_TARGETS` as conditional deletion candidates. Establish
   callers and intended use before removing public or planned behavior.
 
-The native loader currently constructs protobuf requests in-process, with no
-network or binary serialization hop. Extracting a native construction API may
-remove duplicate ID bookkeeping and the `PipData` side channel, but must preserve
-one shared construction/validation layer. Defer that extraction unless
-measurements justify revisiting it; it is not an integration prerequisite.
-A justified no-change or defer decision is acceptable for optional
-optimizations/deletions.
+**Native construction API extraction: completed by user direction.**
+`DirectGraphPipConstructor` owns shared validation and native pip construction
+for process, write/copy, seal, composition and export operations. Its operation
+types use native paths, strings, actual artifacts and PipData; construction
+returns produced artifacts and pip identity directly. Defaults and validation
+remain in this one core, not a loader-specific policy engine.
+
+`DirectGraphPipGraphBuilder` is now the protobuf adapter, retaining protocol
+version checks, ordered ID registration, operation uniqueness, producer
+references, sticky rejection, completion, counters and tracing. It translates
+wire arguments/content to native PipData; no PipData field was added to the
+protocol and version 4 is unchanged.
+
+`DirectGraphTextLoader` calls the native core directly and no longer constructs
+protobuf operations, maintains duplicate ID tables, creates synthetic import
+IDs or reads produced artifacts back through the adapter. The mixed PipData
+side-channel overload and host import/read-back helpers were removed after
+auditing their callers. `DirectGraphValueRegistry` remains for the wire example
+emitter. Parallel project construction, actual producer/rewrite identities,
+native argument factoring/escaping and fingerprint behavior are retained.
+
+Further performance work remains measurement-driven. This layering cleanup
+does not claim representative graph-construction speedups or product rollout
+validation.
 
 ## BoB integration work: separate from tool implementation
 
@@ -833,6 +853,7 @@ for BoB integration. Do not substitute parse-only checks for execution.
 | `review-test-seal-cache-replay` | Exclusion/nested-policy changes, graph reload and cached path sets. |
 | `review-validate-source-seal-consumers` | Per-process policy inventory and cleared baseline-versus-strict consumer comparisons; blocks branch rollout, including stitched Ninja. |
 | `review-measure-native-overheads` | Representative parsing/construction and exporter costs. |
+| `review-extract-native-construction` | Completed: native artifact/PipData core shared by text and protobuf adapters; protocol unchanged. |
 | `review-implement-native-optimizations` | Only measured, discussed changes; optional. |
 | `review-triage-delta-deletions` | Proven unnecessary delta; conditional removals need approval. |
 | `review-inventory-make-contract` | Actual SDK compatibility requirements. |

@@ -35,6 +35,33 @@ Identical artifacts are published once; same-path conflicts (including different
 file rewrite counts or directory seal identities) are errors. Re-exporting
 dependency artifacts is explicit and does not widen dependency visibility.
 
+## Native construction and transport adapters
+
+`DirectGraphPipConstructor.Construct` is the single construction/validation core.
+Its `DirectGraphOperation` subclasses carry `AbsolutePath`, `StringId`, actual
+`FileArtifact`/`DirectoryArtifact` values and `PipData`. Process policies, options,
+environment/passthrough, semaphores, temp allocation, seal exclusions, compositions
+and exports use the same native construction implementation. Results return
+produced artifacts, PipId and semi-stable hash directly.
+
+`DirectGraphTextLoader` translates records and binds visible artifacts, then calls
+that core. It does not construct protobuf messages, allocate protocol IDs, import
+producer IDs, or read artifacts back through a protocol stream. Native argument
+data retains the existing flat/split-argument layout, chunk boundaries and
+whole-argument escaping. Write-file content is likewise native `PipData`.
+
+`DirectGraphPipGraphBuilder` is the ordered protobuf adapter: version checks,
+registration/operation IDs, producer-reference resolution, sticky rejection,
+`Complete`, wire counters and request/response tracing stay there. It converts
+wire strings into `PipData` and calls the same core. The protocol is unchanged:
+version 4, with no wire-level PipData field. `DirectGraphValueRegistry` remains
+available to wire emitters (including the example emitter), not the text loader.
+
+Native operation counts/durations come from the core for text and from the
+adapter for wire requests (including rejected requests), without double counting.
+`Complete` is a wire-only counter. Text verbose logging emits native operation
+summaries; gRPC tracing retains protobuf request/response details.
+
 ## Project construction concurrency
 
 Text projects use the existing `/maxFrontEndConcurrency` setting (processor count
@@ -44,8 +71,9 @@ to finish publishing exports; unrelated projects do not create tier barriers.
 Records/fragments within one project remain strictly ordered. Failed projects
 never start their dependents; already-running independent projects may finish.
 
-Each project has its own `DirectGraphTextLoader`, value tables and native
-`DirectGraphPipGraphBuilder` stream, including registration IDs and producer maps.
+Each project has its own ordered `DirectGraphTextLoader`. The native constructor
+has no registration tables, operation IDs or producer maps; ownership metadata
+uses project/record symbols while artifact references retain actual identity.
 Only ownership checks/claims hold `SharedState.SyncRoot`. Parsing, argument
 composition, source existence probes and native pip construction run outside
 that lock. Artifact/export tables are concurrent and dependency completion
@@ -69,4 +97,4 @@ producer-identity check. These indexes track ownership, not source permissions.
 
 Semi-stable hashes, native temp/object paths and fingerprints must not depend on
 interleaving. PipIds, table allocation IDs and serialized graph bytes need not
-be identical. The external gRPC emitter remains one ordered builder stream.
+be identical. The external gRPC emitter remains one ordered adapter stream.
