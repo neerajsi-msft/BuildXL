@@ -162,7 +162,9 @@ namespace BuildXL.Scheduler.Fingerprints
 
                 int numAbsentPathsEliminated = 0;
 
-                SourceSealDirectoryIndex sourceDirectories;
+                SourceSealDirectoryIndex sourceDirectories = directoryDependencies.Length == 0
+                    ? SourceSealDirectoryIndex.Empty
+                    : environment.TryGetSourceSealDirectoryIndex(pip.UnderlyingPip.PipId, out var boundIndex) ? boundIndex : null;
                 var dynamicObservations = processingState.DynamicObservations;
                 var allowedUndeclaredSourceReads = processingState.AllowedUndeclaredReads;
                 var directoryDependencyContentsFilePaths = processingState.DirectoryDependencyContentsFilePaths;
@@ -225,14 +227,15 @@ namespace BuildXL.Scheduler.Fingerprints
                             {
                                 directoryDependencyContentsFilePaths.Add(f.Path);
                             }
-                            if (environment.IsSourceSealedDirectory(directoryDependency, out var allDirectories, out var patterns, out var exclusions))
+                            if (sourceDirectories == null &&
+                                environment.IsSourceSealedDirectory(directoryDependency, out var allDirectories, out var patterns, out var exclusions))
                             {
                                 processingState.SourceDirectories.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, !allDirectories, exclusions));
                             }
 
                         }
 
-                        sourceDirectories = environment.GetSourceSealDirectoryIndex(pip.UnderlyingPip.PipId, processingState.SourceDirectories);
+                        sourceDirectories ??= environment.GetSourceSealDirectoryIndex(pip.UnderlyingPip.PipId, processingState.SourceDirectories);
                     }
 
                     // We have observed path accesses, but need to match them up to file artifacts.
@@ -1383,6 +1386,9 @@ namespace BuildXL.Scheduler.Fingerprints
         /// <summary>Gets the index shared by processes with equivalent source-seal policies.</summary>
         SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals);
 
+        /// <summary>Returns a graph-bound nonempty index without reconstructing the policy list.</summary>
+        bool TryGetSourceSealDirectoryIndex(PipId pipId, out SourceSealDirectoryIndex index);
+
         /// <summary>
         /// Returns whether there is (by walking the path upwards) an output directory -shared or exclusive- containing <paramref name="path"/>
         /// </summary>
@@ -1894,6 +1900,9 @@ namespace BuildXL.Scheduler.Fingerprints
         /// <inheritdoc />
         public SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals) =>
             m_env.PipTable.SourceSealDirectoryIndices.GetOrAdd(Context.PathTable, seals, pipId);
+
+        public bool TryGetSourceSealDirectoryIndex(PipId pipId, out SourceSealDirectoryIndex index) =>
+            m_env.PipTable.SourceSealDirectoryIndices.TryGet(pipId, out index);
 
         /// <inheritdoc />
         public bool IsPathUnderOutputDirectory(AbsolutePath path)

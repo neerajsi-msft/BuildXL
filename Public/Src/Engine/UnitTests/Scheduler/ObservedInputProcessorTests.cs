@@ -395,6 +395,11 @@ namespace Test.BuildXL.Scheduler
                 = new Dictionary<AbsolutePath, DirectoryMembershipFilter>();
 
             private uint m_nextDirectorySealId;
+            public SourceSealDirectoryIndex BoundSourceIndex { get; set; }
+            public bool FailOnSourceSealQuery { get; set; }
+            public int SourceSealQueries { get; private set; }
+            public int DirectoryListings { get; private set; }
+            public int SourceIndexBuilds { get; private set; }
 
             public Harness()
             {
@@ -684,8 +689,17 @@ namespace Test.BuildXL.Scheduler
             {
                 private readonly SourceSealDirectoryIndex.Cache m_sourceSealDirectoryIndices = new SourceSealDirectoryIndex.Cache();
 
-                public SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals) =>
-                    m_sourceSealDirectoryIndices.GetOrAdd(Context.PathTable, seals, pipId);
+                public SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals)
+                {
+                    m_harness.SourceIndexBuilds++;
+                    return m_sourceSealDirectoryIndices.GetOrAdd(Context.PathTable, seals, pipId);
+                }
+
+                public bool TryGetSourceSealDirectoryIndex(PipId pipId, out SourceSealDirectoryIndex index)
+                {
+                    index = m_harness.BoundSourceIndex;
+                    return index != null || m_sourceSealDirectoryIndices.TryGet(pipId, out index);
+                }
 
                 private readonly Harness m_harness;
 
@@ -835,6 +849,7 @@ namespace Test.BuildXL.Scheduler
 
                 public SortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer> ListSealedDirectoryContents(DirectoryArtifact directoryArtifact)
                 {
+                    m_harness.DirectoryListings++;
                     if (!m_harness.m_sealedDirectories.ContainsKey(directoryArtifact))
                     {
                         XAssert.Fail("Attempted to query directory {0} which was not sealed", directoryArtifact.Path.ToString(Context.PathTable));
@@ -845,6 +860,8 @@ namespace Test.BuildXL.Scheduler
 
                 public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions)
                 {
+                    m_harness.SourceSealQueries++;
+                    Assert.False(m_harness.FailOnSourceSealQuery, "A bound source index must bypass policy discovery.");
                     patterns = ReadOnlyArray<StringId>.Empty;
                     exclusions = SourceSealExclusions.Empty;
                     return m_harness.m_sealedSourceDirectories.TryGetValue(directoryArtifact, out allDirectories);
@@ -860,6 +877,52 @@ namespace Test.BuildXL.Scheduler
                     return false;
                 }
             }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void BoundSourceIndexesBypassPolicyDiscoveryWithoutSkippingListedMembers(bool bound)
+        {
+            var harness = new Harness();
+            var pt = harness.Context.PathTable;
+            var root = harness.Path(A("X", "source"));
+            var implicitFile = root.Combine(pt, "implicit.h");
+            var explicitFile = root.Combine(pt, RelativePath.Create(pt.StringTable, "private/explicit.h"));
+            harness.AddFile(implicitFile, CreateFakeContentHash(1));
+            harness.AddFile(explicitFile, CreateFakeContentHash(2));
+            var source = harness.SealSourceDirectory(root, allDirectories: true);
+            var partial = harness.SealDirectory(root, explicitFile);
+            if (bound)
+            {
+                harness.BoundSourceIndex = new SourceSealDirectoryIndex(pt, new[]
+                {
+                    new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, false,
+                        new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, "private") }))),
+                });
+                harness.FailOnSourceSealQuery = true;
+            }
+            for (int i = 0; i < 2; i++)
+            {
+                harness.Process(ObservedInputProcessingStatus.Success, AllowAccessTo(source, partial), false,
+                    TestObservation.ExpectFileContentRead(implicitFile, CreateFakeContentHash(1)),
+                    TestObservation.ExpectFileContentRead(explicitFile, CreateFakeContentHash(2)));
+            }
+            Assert.Equal(4, harness.DirectoryListings);
+            Assert.Equal(bound ? 0 : 4, harness.SourceSealQueries);
+            Assert.Equal(bound ? 0 : 2, harness.SourceIndexBuilds);
+        }
+
+        [Fact]
+        public void NoDirectoryDependenciesUseTheSharedEmptyIndexWithoutDiscovery()
+        {
+            var harness = new Harness { FailOnSourceSealQuery = true };
+            var file = harness.Path(A("X", "input"));
+            harness.AddFile(file, CreateFakeContentHash(1));
+            harness.Process(ObservedInputProcessingStatus.Mismatched, AllowAccessTo(), false,
+                TestObservation.ExpectAccessCheckFailure(file));
+            Assert.Equal(0, harness.DirectoryListings);
+            Assert.Equal(0, harness.SourceIndexBuilds);
         }
 
         [Fact]
