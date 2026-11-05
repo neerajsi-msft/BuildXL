@@ -446,29 +446,75 @@ namespace Test.BuildXL.Scheduler
                 ids[i] = table.Add((uint)i + 1, seal);
             }
 
-            System.Collections.Generic.IEnumerable<SourceSealWithPatterns> ReadPolicies()
+            System.Collections.Generic.IEnumerable<SourceSealWithPatterns> ReadPolicies(bool memoized)
             {
                 foreach (var id in ids)
                 {
-                    var kind = table.GetSealDirectoryKind(id);
-                    yield return new SourceSealWithPatterns(table.GetSealDirectoryRoot(id),
-                        table.GetSourceSealDirectoryPatterns(id), kind == SealDirectoryKind.SourceTopDirectoryOnly,
-                        table.GetSourceSealDirectoryExclusions(id));
+                    if (memoized)
+                    {
+                        if (!table.SourceSealDirectoryIndices.TryGetSealPolicy(table, id, out var policy))
+                        {
+                            throw new System.InvalidOperationException("Expected a source seal policy.");
+                        }
+                        yield return policy;
+                    }
+                    else
+                    {
+                        var kind = table.GetSealDirectoryKind(id);
+                        yield return new SourceSealWithPatterns(table.GetSealDirectoryRoot(id),
+                            table.GetSourceSealDirectoryPatterns(id), kind == SealDirectoryKind.SourceTopDirectoryOnly,
+                            table.GetSourceSealDirectoryExclusions(id));
+                    }
                 }
             }
 
-            var expected = table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies());
-            for (int i = 0; i < 100; i++) table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies());
-            const int iterations = 1000;
-            long before = System.GC.GetAllocatedBytesForCurrentThread();
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            SourceSealDirectoryIndex actual = null;
-            for (int i = 0; i < iterations; i++) actual = table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies());
-            watch.Stop();
-            long allocated = System.GC.GetAllocatedBytesForCurrentThread() - before;
-            Assert.Same(expected, actual);
-            m_output.WriteLine($"256-seal construction-style hits: {allocated / iterations} bytes/call, {watch.ElapsedMilliseconds}ms/{iterations} calls");
+            var expected = table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies(memoized: false));
+            void Measure(bool memoized)
+            {
+                for (int i = 0; i < 100; i++) table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies(memoized));
+                const int iterations = 1000;
+                long before = System.GC.GetAllocatedBytesForCurrentThread();
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                SourceSealDirectoryIndex actual = null;
+                for (int i = 0; i < iterations; i++) actual = table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies(memoized));
+                watch.Stop();
+                long allocated = System.GC.GetAllocatedBytesForCurrentThread() - before;
+                Assert.Same(expected, actual);
+                m_output.WriteLine($"256-seal construction-style hits (memoized={memoized}): {allocated / iterations} bytes/call, {watch.ElapsedMilliseconds}ms/{iterations} calls");
+            }
+            Measure(memoized: false);
+            Measure(memoized: true);
             m_output.WriteLine($"SourceSealWithPatterns size: {System.Runtime.CompilerServices.Unsafe.SizeOf<SourceSealWithPatterns>()} bytes");
+        }
+
+        [Theory]
+        [InlineData(SealDirectoryKind.SourceAllDirectories)]
+        [InlineData(SealDirectoryKind.SourceTopDirectoryOnly)]
+        public void SealPolicyMemoPreservesMetadataDuringConcurrentLookup(SealDirectoryKind kind)
+        {
+            var context = BuildXLContext.CreateInstanceForTesting();
+            var pt = context.PathTable;
+            using var table = new global::BuildXL.Pips.PipTable(pt, context.SymbolTable,
+                initialBufferSize: 1024, maxDegreeOfParallelism: 1, debug: false);
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var patterns = ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.h") });
+            var exclusions = new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, ".git") }));
+            var seal = new SealDirectory(root,
+                CollectionUtilities.EmptySortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>(OrdinalFileArtifactComparer.Instance),
+                CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                kind, PipProvenance.CreateDummy(context), ReadOnlyArray<StringId>.Empty, patterns, sourceExclusions: exclusions);
+            seal.SetDirectoryArtifact(new DirectoryArtifact(root, 1));
+            var id = table.Add(1, seal);
+            var expected = new SourceSealWithPatterns(root, patterns, kind == SealDirectoryKind.SourceTopDirectoryOnly, exclusions);
+            System.Threading.Tasks.Parallel.For(0, 64, _ =>
+            {
+                Assert.True(table.SourceSealDirectoryIndices.TryGetSealPolicy(table, id, out var policy));
+                Assert.Equal(expected, policy);
+                Assert.Equal(expected.GetHashCode(), policy.GetHashCode());
+            });
+            var nonSeal = table.Add(2, new HashSourceFile(FileArtifact.CreateSourceFile(root.Combine(pt, "file"))));
+            Assert.False(table.SourceSealDirectoryIndices.TryGetSealPolicy(table, nonSeal, out var missing));
+            Assert.Equal(default(SourceSealWithPatterns), missing);
         }
 
         [Fact]

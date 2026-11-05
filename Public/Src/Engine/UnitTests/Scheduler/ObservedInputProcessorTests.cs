@@ -858,13 +858,17 @@ namespace Test.BuildXL.Scheduler
                     return m_harness.m_sealedDirectories[directoryArtifact];
                 }
 
-                public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions)
+                public bool TryGetSourceSealPolicy(DirectoryArtifact directoryArtifact, out SourceSealWithPatterns policy)
                 {
                     m_harness.SourceSealQueries++;
                     Assert.False(m_harness.FailOnSourceSealQuery, "A bound source index must bypass policy discovery.");
-                    patterns = ReadOnlyArray<StringId>.Empty;
-                    exclusions = SourceSealExclusions.Empty;
-                    return m_harness.m_sealedSourceDirectories.TryGetValue(directoryArtifact, out allDirectories);
+                    policy = default;
+                    if (!m_harness.m_sealedSourceDirectories.TryGetValue(directoryArtifact, out bool allDirectories))
+                    {
+                        return false;
+                    }
+                    policy = new SourceSealWithPatterns(directoryArtifact.Path, ReadOnlyArray<StringId>.Empty, !allDirectories);
+                    return true;
                 }
 
                 public Possible<PathExistence> TryProbeAndTrackForExistence(AbsolutePath path, CacheablePipInfo pipInfo, ObservationFlags flags, bool isReadOnly, bool cachePathExistence = false, DebugTrace trace = default)

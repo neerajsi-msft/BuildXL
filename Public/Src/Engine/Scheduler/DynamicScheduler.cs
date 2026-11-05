@@ -6116,28 +6116,11 @@ namespace BuildXL.Scheduler
             out SourceSealExclusions exclusions)
         {
             Contract.Requires(directoryArtifact.IsValid);
-            pattern = ReadOnlyArray<StringId>.Empty;
-            exclusions = SourceSealExclusions.Empty;
-            var sealDirectoryKind = GetSealDirectoryKind(directoryArtifact);
-
-            if (sealDirectoryKind.IsSourceSeal())
-            {
-                pattern = GetSourceSealDirectoryPatterns(directoryArtifact);
-                exclusions = PipGraph.PipTable.GetSourceSealDirectoryExclusions(PipGraph.GetSealedDirectoryNode(directoryArtifact).ToPipId());
-            }
-
-            switch (sealDirectoryKind)
-            {
-                case SealDirectoryKind.SourceAllDirectories:
-                    allDirectories = true;
-                    return true;
-                case SealDirectoryKind.SourceTopDirectoryOnly:
-                    allDirectories = false;
-                    return true;
-                default:
-                    allDirectories = false;
-                    return false;
-            }
+            bool source = ((IFileContentManagerHost)this).TryGetSourceSealDirectory(directoryArtifact, out var policy);
+            allDirectories = source && !policy.IsTopDirectoryOnly;
+            pattern = source ? policy.Patterns : ReadOnlyArray<StringId>.Empty;
+            exclusions = source ? policy.Exclusions : SourceSealExclusions.Empty;
+            return source;
         }
 
         /// <inheritdoc />
@@ -7463,15 +7446,8 @@ namespace BuildXL.Scheduler
         [SuppressMessage("Microsoft.Design", "CA1033:InterfaceMethodsShouldBeCallableByChildTypes")]
         bool IFileContentManagerHost.TryGetSourceSealDirectory(DirectoryArtifact directory, out SourceSealWithPatterns sourceSealWithPatterns)
         {
-            sourceSealWithPatterns = default;
-
-            if (((IPipExecutionEnvironment)this).IsSourceSealedDirectory(directory, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out var exclusions))
-            {
-                sourceSealWithPatterns = new SourceSealWithPatterns(directory.Path, patterns, !allDirectories, exclusions);
-                return true;
-            }
-
-            return false;
+            var pipId = PipGraph.GetSealedDirectoryNode(directory).ToPipId();
+            return m_pipTable.SourceSealDirectoryIndices.TryGetSealPolicy(m_pipTable, pipId, out sourceSealWithPatterns);
         }
 
         [SuppressMessage("Microsoft.Design", "CA1033:InterfaceMethodsShouldBeCallableByChildTypes")]
@@ -7513,12 +7489,6 @@ namespace BuildXL.Scheduler
             Contract.Requires(directory.IsValid);
             var sealDirectoryId = PipGraph.GetSealedDirectoryNode(directory).ToPipId();
             return PipGraph.PipTable.ShouldScrubFullSealDirectory(sealDirectoryId);
-        }
-
-        private ReadOnlyArray<StringId> GetSourceSealDirectoryPatterns(DirectoryArtifact directory)
-        {
-            var sealDirectoryId = PipGraph.GetSealedDirectoryNode(directory).ToPipId();
-            return PipGraph.PipTable.GetSourceSealDirectoryPatterns(sealDirectoryId);
         }
 
         [SuppressMessage("Microsoft.Design", "CA1033:InterfaceMethodsShouldBeCallableByChildTypes")]

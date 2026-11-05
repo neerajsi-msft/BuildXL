@@ -1491,13 +1491,9 @@ namespace BuildXL.Pips.Graph
                     foreach (var directory in directories)
                     {
                         var pipId = GetSealedDirectoryNode(directory).ToPipId();
-                        var kind = PipTable.GetSealDirectoryKind(pipId);
-                        if (kind.IsSourceSeal())
+                        if (PipTable.SourceSealDirectoryIndices.TryGetSealPolicy(PipTable, pipId, out var policy))
                         {
-                            yield return new SourceSealWithPatterns(directory.Path,
-                                PipTable.GetSourceSealDirectoryPatterns(pipId),
-                                kind == SealDirectoryKind.SourceTopDirectoryOnly,
-                                PipTable.GetSourceSealDirectoryExclusions(pipId));
+                            yield return policy;
                         }
                     }
                 }

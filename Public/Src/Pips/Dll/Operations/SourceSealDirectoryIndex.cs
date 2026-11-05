@@ -246,6 +246,8 @@ namespace BuildXL.Pips.Operations
             private readonly ConcurrentDictionary<PipId, SourceSealDirectoryIndex> m_pipIndices =
                 new ConcurrentDictionary<PipId, SourceSealDirectoryIndex>();
 
+            private readonly ConcurrentDictionary<PipId, SourceSealWithPatterns> m_sealPolicies = new();
+
             private readonly ConcurrentDictionary<HashSet<SourceSealWithPatterns>, Lazy<SourceSealDirectoryIndex>> m_indices =
                 new ConcurrentDictionary<HashSet<SourceSealWithPatterns>, Lazy<SourceSealDirectoryIndex>>(HashSet<SourceSealWithPatterns>.CreateSetComparer());
 
@@ -254,6 +256,30 @@ namespace BuildXL.Pips.Operations
 
             /// <summary>Number of nonempty per-pip bindings retained by this cache.</summary>
             public int BoundIndexCount => m_pipIndices.Count;
+
+            /// <summary>Gets an immutable source-seal policy from this cache's owning pip table, without hydration.</summary>
+            public bool TryGetSealPolicy(IPipTable pipTable, PipId sealPipId, out SourceSealWithPatterns policy)
+            {
+                Contract.Requires(pipTable != null);
+                Contract.Requires(sealPipId.IsValid);
+                if (m_sealPolicies.TryGetValue(sealPipId, out policy))
+                {
+                    return true;
+                }
+
+                var kind = pipTable.GetSealDirectoryKind(sealPipId);
+                if (!kind.IsSourceSeal())
+                {
+                    return false;
+                }
+
+                var candidate = new SourceSealWithPatterns(pipTable.GetSealDirectoryRoot(sealPipId),
+                    pipTable.GetSourceSealDirectoryPatterns(sealPipId),
+                    kind == SealDirectoryKind.SourceTopDirectoryOnly,
+                    pipTable.GetSourceSealDirectoryExclusions(sealPipId));
+                policy = m_sealPolicies.GetOrAdd(sealPipId, candidate);
+                return true;
+            }
 
             /// <summary>Returns the shared index, ignoring artifact IDs, duplicates and seal order.</summary>
             public SourceSealDirectoryIndex GetOrAdd(PathTable pathTable, IEnumerable<SourceSealWithPatterns> seals, PipId pipId = default)

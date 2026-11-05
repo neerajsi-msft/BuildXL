@@ -228,9 +228,9 @@ namespace BuildXL.Scheduler.Fingerprints
                                 directoryDependencyContentsFilePaths.Add(f.Path);
                             }
                             if (sourceDirectories == null &&
-                                environment.IsSourceSealedDirectory(directoryDependency, out var allDirectories, out var patterns, out var exclusions))
+                                environment.TryGetSourceSealPolicy(directoryDependency, out var policy))
                             {
-                                processingState.SourceDirectories.Add(new SourceSealWithPatterns(directoryDependency.Path, patterns, !allDirectories, exclusions));
+                                processingState.SourceDirectories.Add(policy);
                             }
 
                         }
@@ -1378,10 +1378,8 @@ namespace BuildXL.Scheduler.Fingerprints
         /// </summary>
         SortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer> ListSealedDirectoryContents(DirectoryArtifact directoryArtifact);
 
-        /// <summary>
-        /// See <see cref="IPipExecutionEnvironment.IsSourceSealedDirectory"/>
-        /// </summary>
-        bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions);
+        /// <summary>Gets the source policy shared with graph construction, if this is a source seal.</summary>
+        bool TryGetSourceSealPolicy(DirectoryArtifact directoryArtifact, out SourceSealWithPatterns policy);
 
         /// <summary>Gets the index shared by processes with equivalent source-seal policies.</summary>
         SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals);
@@ -1892,10 +1890,8 @@ namespace BuildXL.Scheduler.Fingerprints
         }
 
         /// <inheritdoc />
-        public bool IsSourceSealedDirectory(DirectoryArtifact directoryArtifact, out bool allDirectories, out ReadOnlyArray<StringId> patterns, out SourceSealExclusions exclusions)
-        {
-            return m_env.IsSourceSealedDirectory(directoryArtifact, out allDirectories, out patterns, out exclusions);
-        }
+        public bool TryGetSourceSealPolicy(DirectoryArtifact directoryArtifact, out SourceSealWithPatterns policy) =>
+            m_env.State.FileContentManager.Host.TryGetSourceSealDirectory(directoryArtifact, out policy);
 
         /// <inheritdoc />
         public SourceSealDirectoryIndex GetSourceSealDirectoryIndex(PipId pipId, IEnumerable<SourceSealWithPatterns> seals) =>

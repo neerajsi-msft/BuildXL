@@ -190,6 +190,7 @@ namespace Test.BuildXL.Pips
                     Assert.IsType<FileBackedPipTable>(table);
                     Assert.Equal(PipType.HashSourceFile, table.GetPipType(new PipId(1)));
                     Assert.Equal(new PipId(1), table.HydratePip(new PipId(1), PipQueryContext.Test).PipId);
+                    Assert.False(table.SourceSealDirectoryIndices.TryGetSealPolicy(table, new PipId(1), out _));
                     AssertSourceSealExclusions(table, new PipId(2), pathTable);
                     Assert.Equal(0, table.Size);
                 }
@@ -235,6 +236,12 @@ namespace Test.BuildXL.Pips
             }, exclusions.Paths.ToArray());
             var seal = Assert.IsType<SealDirectory>(table.HydratePip(pipId, PipQueryContext.Test));
             Assert.Equal(exclusions.Paths.ToArray(), seal.SourceExclusions.Paths.ToArray());
+            Assert.True(table.SourceSealDirectoryIndices.TryGetSealPolicy(table, pipId, out var policy));
+            Assert.Equal(new SourceSealWithPatterns(seal.Directory.Path, seal.Patterns,
+                seal.Kind == SealDirectoryKind.SourceTopDirectoryOnly, seal.SourceExclusions), policy);
+            Assert.True(table.SourceSealDirectoryIndices.TryGetSealPolicy(table, pipId, out var cached));
+            Assert.Equal(policy.GetHashCode(), cached.GetHashCode());
+            Assert.Same(policy.Exclusions, cached.Exclusions);
         }
     }
 }
