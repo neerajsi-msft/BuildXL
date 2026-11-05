@@ -20,6 +20,8 @@ namespace BuildXL.Pips.Operations
         /// </summary>
         public readonly AbsolutePath Path;
 
+        private readonly int m_hashCode;
+
         /// <summary>
         /// Wildcard patterns that filter the contents of the source seal directory
         /// </summary>
@@ -44,6 +46,7 @@ namespace BuildXL.Pips.Operations
             Patterns = patterns.IsValid ? patterns : ReadOnlyArray<StringId>.Empty;
             IsTopDirectoryOnly = isTopDirectoryOnly;
             Exclusions = exclusions ?? SourceSealExclusions.Empty;
+            m_hashCode = ComputeHashCode(Path, Patterns, IsTopDirectoryOnly, Exclusions);
         }
 
         /// <inheritdoc />
@@ -51,6 +54,7 @@ namespace BuildXL.Pips.Operations
         {
             if (Path != other.Path) return false;
             if (!Path.IsValid) return true;
+            if (m_hashCode != other.m_hashCode) return false;
             if (IsTopDirectoryOnly != other.IsTopDirectoryOnly ||
                 Patterns.Length != other.Patterns.Length || Exclusions.Paths.Length != other.Exclusions.Paths.Length)
             {
@@ -71,22 +75,19 @@ namespace BuildXL.Pips.Operations
         public override bool Equals(object obj) => obj is SourceSealWithPatterns other && Equals(other);
 
         /// <inheritdoc />
-        public override int GetHashCode()
-        {
-            if (!Path.IsValid)
-            {
-                return 0;
-            }
+        public override int GetHashCode() => m_hashCode;
 
-            int hash = HashCodeHelper.Combine(Path.GetHashCode(), IsTopDirectoryOnly ? 1 : 0);
-            foreach (var pattern in Patterns)
+        private static int ComputeHashCode(AbsolutePath path, ReadOnlyArray<StringId> patterns, bool isTopDirectoryOnly, SourceSealExclusions exclusions)
+        {
+            int hash = HashCodeHelper.Combine(path.GetHashCode(), isTopDirectoryOnly ? 1 : 0);
+            foreach (var pattern in patterns)
             {
                 hash = HashCodeHelper.Combine(hash, pattern.GetHashCode());
             }
 
-            foreach (var path in Exclusions.Paths)
+            foreach (var exclusion in exclusions.Paths)
             {
-                hash = HashCodeHelper.Combine(hash, path.GetHashCode());
+                hash = HashCodeHelper.Combine(hash, exclusion.GetHashCode());
             }
 
             return hash;

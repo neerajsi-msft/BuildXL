@@ -237,6 +237,33 @@ namespace Test.BuildXL.Scheduler
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
+        public void CachedHashesPreservePolicyValueEquality(bool topOnly)
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var patterns = ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.h"), StringId.Create(pt.StringTable, "*.c") });
+            var excluded = RelativePath.Create(pt.StringTable, ".git");
+            var first = new SourceSealWithPatterns(root, patterns, topOnly,
+                new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { excluded })));
+            var equivalent = new SourceSealWithPatterns(root,
+                ReadOnlyArray<StringId>.From(new[] { patterns[0], patterns[1] }), topOnly,
+                new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { excluded })));
+            Assert.Equal(first, equivalent);
+            Assert.Equal(first.GetHashCode(), equivalent.GetHashCode());
+            Assert.NotEqual(first, new SourceSealWithPatterns(root, patterns, !topOnly, first.Exclusions));
+            Assert.NotEqual(first, new SourceSealWithPatterns(root,
+                ReadOnlyArray<StringId>.From(new[] { patterns[1], patterns[0] }), topOnly, first.Exclusions));
+            Assert.NotEqual(default(SourceSealWithPatterns), first);
+
+            var normalized = new SourceSealWithPatterns(root, default, topOnly);
+            var empty = new SourceSealWithPatterns(root, ReadOnlyArray<StringId>.Empty, topOnly, SourceSealExclusions.Empty);
+            Assert.Equal(normalized, empty);
+            Assert.Equal(normalized.GetHashCode(), empty.GetHashCode());
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
         public void LookupCachePreservesBoundariesPatternsAndProbeFlags(bool reverse)
         {
             var pt = new PathTable();
@@ -394,6 +421,54 @@ namespace Test.BuildXL.Scheduler
         {
             Assert.Fail("A bound pip must reuse its validated index.");
             yield break;
+        }
+
+        [Fact]
+        public void ConstructionStylePolicyLookupMeasurements()
+        {
+            var context = BuildXLContext.CreateInstanceForTesting();
+            var pt = context.PathTable;
+            using var table = new global::BuildXL.Pips.PipTable(pt, context.SymbolTable,
+                initialBufferSize: 1024, maxDegreeOfParallelism: 1, debug: false);
+            var ids = new global::BuildXL.Pips.PipId[256];
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var patterns = ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.h") });
+            var exclusions = new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, ".git") }));
+            for (int i = 0; i < ids.Length; i++)
+            {
+                var directory = root.Combine(pt, "root" + i);
+                var seal = new SealDirectory(directory,
+                    CollectionUtilities.EmptySortedReadOnlyArray<FileArtifact, OrdinalFileArtifactComparer>(OrdinalFileArtifactComparer.Instance),
+                    CollectionUtilities.EmptySortedReadOnlyArray<DirectoryArtifact, OrdinalDirectoryArtifactComparer>(OrdinalDirectoryArtifactComparer.Instance),
+                    SealDirectoryKind.SourceAllDirectories, PipProvenance.CreateDummy(context),
+                    ReadOnlyArray<StringId>.Empty, patterns, sourceExclusions: exclusions);
+                seal.SetDirectoryArtifact(new DirectoryArtifact(directory, (uint)i + 1));
+                ids[i] = table.Add((uint)i + 1, seal);
+            }
+
+            System.Collections.Generic.IEnumerable<SourceSealWithPatterns> ReadPolicies()
+            {
+                foreach (var id in ids)
+                {
+                    var kind = table.GetSealDirectoryKind(id);
+                    yield return new SourceSealWithPatterns(table.GetSealDirectoryRoot(id),
+                        table.GetSourceSealDirectoryPatterns(id), kind == SealDirectoryKind.SourceTopDirectoryOnly,
+                        table.GetSourceSealDirectoryExclusions(id));
+                }
+            }
+
+            var expected = table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies());
+            for (int i = 0; i < 100; i++) table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies());
+            const int iterations = 1000;
+            long before = System.GC.GetAllocatedBytesForCurrentThread();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            SourceSealDirectoryIndex actual = null;
+            for (int i = 0; i < iterations; i++) actual = table.SourceSealDirectoryIndices.GetOrAdd(pt, ReadPolicies());
+            watch.Stop();
+            long allocated = System.GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Same(expected, actual);
+            m_output.WriteLine($"256-seal construction-style hits: {allocated / iterations} bytes/call, {watch.ElapsedMilliseconds}ms/{iterations} calls");
+            m_output.WriteLine($"SourceSealWithPatterns size: {System.Runtime.CompilerServices.Unsafe.SizeOf<SourceSealWithPatterns>()} bytes");
         }
 
         [Fact]
