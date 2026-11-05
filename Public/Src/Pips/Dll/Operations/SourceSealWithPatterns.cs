@@ -3,7 +3,6 @@
 
 using System;
 using System.Diagnostics.ContractsLight;
-using System.Linq;
 using BuildXL.Native.IO;
 using BuildXL.Utilities;
 using BuildXL.Utilities.Core;
@@ -48,11 +47,25 @@ namespace BuildXL.Pips.Operations
         }
 
         /// <inheritdoc />
-        public bool Equals(SourceSealWithPatterns other) =>
-            Path == other.Path && (!Path.IsValid ||
-                (IsTopDirectoryOnly == other.IsTopDirectoryOnly
-                && Patterns.SequenceEqual(other.Patterns)
-                && Exclusions.Paths.SequenceEqual(other.Exclusions.Paths)));
+        public bool Equals(SourceSealWithPatterns other)
+        {
+            if (Path != other.Path) return false;
+            if (!Path.IsValid) return true;
+            if (IsTopDirectoryOnly != other.IsTopDirectoryOnly ||
+                Patterns.Length != other.Patterns.Length || Exclusions.Paths.Length != other.Exclusions.Paths.Length)
+            {
+                return false;
+            }
+            for (int i = 0; i < Patterns.Length; i++)
+            {
+                if (Patterns[i] != other.Patterns[i]) return false;
+            }
+            for (int i = 0; i < Exclusions.Paths.Length; i++)
+            {
+                if (Exclusions.Paths[i] != other.Exclusions.Paths[i]) return false;
+            }
+            return true;
+        }
 
         /// <inheritdoc />
         public override bool Equals(object obj) => obj is SourceSealWithPatterns other && Equals(other);

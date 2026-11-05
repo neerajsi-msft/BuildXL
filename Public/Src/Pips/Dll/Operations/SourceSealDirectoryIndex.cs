@@ -29,6 +29,12 @@ namespace BuildXL.Pips.Operations
     /// <remarks>Graph construction rejects source roots at or below an exclusion.</remarks>
     public sealed class SourceSealDirectoryIndex
     {
+        /// <summary>A path-table-independent index for an empty source policy set.</summary>
+        public static SourceSealDirectoryIndex Empty { get; } = new SourceSealDirectoryIndex(null, Array.Empty<SourceSealWithPatterns>());
+
+        /// <summary>Whether this index contains no source policies or exclusions.</summary>
+        public bool IsEmpty => m_boundaries.Count == 0;
+
         private readonly Dictionary<AbsolutePath, BoundaryNode> m_boundaries = new Dictionary<AbsolutePath, BoundaryNode>();
 
         private sealed class BoundaryNode
@@ -236,11 +242,18 @@ namespace BuildXL.Pips.Operations
         /// <summary>Interns equivalent policy sets for the lifetime of a pip table.</summary>
         public sealed class Cache
         {
+            private static readonly ObjectPool<HashSet<SourceSealWithPatterns>> s_policySets = Pools.CreateSetPool<SourceSealWithPatterns>();
             private readonly ConcurrentDictionary<PipId, SourceSealDirectoryIndex> m_pipIndices =
                 new ConcurrentDictionary<PipId, SourceSealDirectoryIndex>();
 
             private readonly ConcurrentDictionary<HashSet<SourceSealWithPatterns>, Lazy<SourceSealDirectoryIndex>> m_indices =
                 new ConcurrentDictionary<HashSet<SourceSealWithPatterns>, Lazy<SourceSealDirectoryIndex>>(HashSet<SourceSealWithPatterns>.CreateSetComparer());
+
+            /// <summary>Looks up a nonempty index already bound to this pip, without enumerating policies.</summary>
+            public bool TryGet(PipId pipId, out SourceSealDirectoryIndex index) => m_pipIndices.TryGetValue(pipId, out index);
+
+            /// <summary>Number of nonempty per-pip bindings retained by this cache.</summary>
+            public int BoundIndexCount => m_pipIndices.Count;
 
             /// <summary>Returns the shared index, ignoring artifact IDs, duplicates and seal order.</summary>
             public SourceSealDirectoryIndex GetOrAdd(PathTable pathTable, IEnumerable<SourceSealWithPatterns> seals, PipId pipId = default)
@@ -250,10 +263,24 @@ namespace BuildXL.Pips.Operations
                     return existing;
                 }
 
-                var key = new HashSet<SourceSealWithPatterns>(seals);
-                var index = m_indices.GetOrAdd(key,
-                    policies => new Lazy<SourceSealDirectoryIndex>(() => new SourceSealDirectoryIndex(pathTable, policies))).Value;
+                using var pooled = s_policySets.GetInstance();
+                var probe = pooled.Instance;
+                probe.UnionWith(seals);
+                if (probe.Count == 0)
+                {
+                    return Empty;
+                }
+
+                var index = m_indices.TryGetValue(probe, out var cached) ? cached.Value : AddPolicySet(pathTable, probe);
                 return pipId.IsValid ? m_pipIndices.GetOrAdd(pipId, index) : index;
+            }
+
+            private SourceSealDirectoryIndex AddPolicySet(PathTable pathTable, HashSet<SourceSealWithPatterns> probe)
+            {
+                // Only retained keys own their storage. A hit never captures or retains the pooled probe.
+                var key = new HashSet<SourceSealWithPatterns>(probe);
+                return m_indices.GetOrAdd(key,
+                    policies => new Lazy<SourceSealDirectoryIndex>(() => new SourceSealDirectoryIndex(pathTable, policies))).Value;
             }
 
             /// <summary>Binds a validated index after graph construction assigns the pip's ID.</summary>
@@ -261,6 +288,11 @@ namespace BuildXL.Pips.Operations
             {
                 Contract.Requires(pipId.IsValid);
                 Contract.Requires(index.IsValid);
+                if (index.IsEmpty)
+                {
+                    Contract.Assert(!m_pipIndices.ContainsKey(pipId), "A pip's source policy index cannot change.");
+                    return;
+                }
                 var existing = m_pipIndices.GetOrAdd(pipId, index);
                 Contract.Assert(ReferenceEquals(existing, index), "A pip's source policy index cannot change.");
             }

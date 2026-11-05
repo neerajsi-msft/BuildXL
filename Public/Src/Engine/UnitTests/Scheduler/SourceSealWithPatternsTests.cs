@@ -12,8 +12,9 @@ namespace Test.BuildXL.Scheduler
 {
     public class SourceSealWithPatternsTests : XunitBuildXLTest
     {
+        private readonly ITestOutputHelper m_output;
         public SourceSealWithPatternsTests(ITestOutputHelper output)
-            : base(output) { }
+            : base(output) { m_output = output; }
 
         [Fact]
         public void TestSourceSealPatterns()
@@ -333,6 +334,60 @@ namespace Test.BuildXL.Scheduler
                 Assert.Equal(SourceSealMatch.Included, included.Match(pt, child, ref cache));
                 Assert.Equal(3, cache.Misses);
             });
+        }
+
+        [Fact]
+        public void EmptyPoliciesShareOneIndexWithoutPerPipEntriesIncludingAfterReload()
+        {
+            var pt = new PathTable();
+            var cache = new SourceSealDirectoryIndex.Cache();
+            for (uint id = 1; id <= 256; id++)
+            {
+                var pip = new global::BuildXL.Pips.PipId(id);
+                var index = cache.GetOrAdd(pt, System.Array.Empty<SourceSealWithPatterns>(), pip);
+                Assert.Same(SourceSealDirectoryIndex.Empty, index);
+                cache.Bind(pip, index);
+                Assert.False(cache.TryGet(pip, out _));
+            }
+            Assert.Equal(0, cache.BoundIndexCount);
+            var reloaded = new SourceSealDirectoryIndex.Cache();
+            Assert.Same(SourceSealDirectoryIndex.Empty, reloaded.GetOrAdd(pt, System.Array.Empty<SourceSealWithPatterns>(), new global::BuildXL.Pips.PipId(123)));
+            Assert.Equal(SourceSealMatch.None, SourceSealDirectoryIndex.Empty.Match(pt, AbsolutePath.Create(pt, X("/c/source/file"))));
+        }
+
+        [Fact]
+        public void WarmPolicySetLookupsDoNotAllocateInProportionToTheSealCount()
+        {
+            var pt = new PathTable();
+            var root = AbsolutePath.Create(pt, X("/c/source"));
+            var policies = new SourceSealWithPatterns[256];
+            for (int i = 0; i < policies.Length; i++)
+            {
+                policies[i] = new SourceSealWithPatterns(root.Combine(pt, "root" + i),
+                    ReadOnlyArray<StringId>.From(new[] { StringId.Create(pt.StringTable, "*.h") }), false,
+                    new SourceSealExclusions(ReadOnlyArray<RelativePath>.From(new[] { RelativePath.Create(pt.StringTable, ".git") })));
+            }
+            var cache = new SourceSealDirectoryIndex.Cache();
+            var expected = cache.GetOrAdd(pt, policies);
+            for (int i = 0; i < 100; i++) cache.GetOrAdd(pt, policies);
+            const int iterations = 1000;
+            long before = System.GC.GetAllocatedBytesForCurrentThread();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            SourceSealDirectoryIndex actual = null;
+            for (int i = 0; i < iterations; i++) actual = cache.GetOrAdd(pt, policies);
+            long allocated = System.GC.GetAllocatedBytesForCurrentThread() - before;
+            watch.Stop();
+            Assert.Same(expected, actual);
+            Assert.True(allocated < iterations * 512L, $"Warm hits allocated {allocated} bytes.");
+            m_output.WriteLine($"256-seal warm hits: {allocated / iterations} bytes/call, {watch.ElapsedMilliseconds}ms/{iterations} calls");
+
+            before = System.GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < iterations; i++)
+            {
+                System.GC.KeepAlive(new System.Collections.Generic.HashSet<SourceSealWithPatterns>(policies));
+            }
+            long formerKeyBytes = System.GC.GetAllocatedBytesForCurrentThread() - before;
+            m_output.WriteLine($"Former per-call HashSet key construction alone: {formerKeyBytes / iterations} bytes/call");
         }
 
         private static System.Collections.Generic.IEnumerable<SourceSealWithPatterns> ThrowIfEnumerated()
