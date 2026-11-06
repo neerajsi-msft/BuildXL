@@ -600,25 +600,39 @@ int BPF_PROG(security_path_link_entry, struct dentry *old_dentry, const struct p
         return 0;
     }
 
-    struct path new_path = {.dentry = new_dentry, .mnt = BPF_CORE_READ(new_dir, mnt)};
-
-    if (!should_send_path(runner_pid, kGenericWrite, &new_path))
-    {
-        return 0;
-    }
-    
     char* temp_path = bpf_map_lookup_elem(&tmp_paths, &ZERO);
     if (!temp_path)
     {
         return 0;
     }
+
+    // linkat rejects cross-mount links before this hook, so both paths share this mount.
+    struct path old_path = {.dentry = old_dentry, .mnt = BPF_CORE_READ(new_dir, mnt)};
+    if (should_send_path(runner_pid, kGenericRead, &old_path))
+    {
+        unsigned int source_length = path_to_string(temp_path, &old_path) & (PATH_MAX - 1);
+        submit_file_access(
+            runner_pid,
+            kGenericRead,
+            KERNEL_FUNCTION(security_path_link),
+            noResolve,
+            pid,
+            /* child_pid */ 0,
+            /* mode */ get_mode(old_dentry),
+            /* error */ 0,
+            temp_path,
+            source_length);
+    }
+
+    struct path new_path = {.dentry = new_dentry, .mnt = BPF_CORE_READ(new_dir, mnt)};
+    if (!should_send_path(runner_pid, kGenericWrite, &new_path))
+    {
+        return 0;
+    }
+
     path_to_string(temp_path, new_dir);
     unsigned int path_length = combine_paths(temp_path, (const char *)new_name) & (PATH_MAX - 1);
 
-    // The link operation involves a write on the newly created link
-    // Observe this operation involves a probe on the source as well (old_dentry). But that
-    // access is going to get catch by path_lookupat (and reporting it here is harder because
-    // we have the old dentry but not the old mount)
     submit_file_access(
         runner_pid,
         kGenericWrite,

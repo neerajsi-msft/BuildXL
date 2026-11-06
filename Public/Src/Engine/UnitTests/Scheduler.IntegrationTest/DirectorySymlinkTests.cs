@@ -721,6 +721,43 @@ SubFolder/symlink -> ../../{inputDirName}/";
             RunScheduler().AssertSuccess();
         }
 
+        [TheoryIfSupported(requiresLinuxBasedOperatingSystem: true, requiresSymlinkPermission: true)]
+        [InlineData("")]
+        [InlineData("first")]
+        public void HardlinkSourceContentChangesInvalidateDirectoryConsumer(string initialContent)
+        {
+            var source = CreateSourceFile();
+            var sourcePath = ArtifactToString(source);
+            File.WriteAllText(sourcePath, initialContent);
+            var unrelated = CreateSourceFile();
+            var sourceDirectory = SealDirectory(source.Path.GetParent(Context.PathTable), SealDirectoryKind.SourceAllDirectories);
+            var output = CreateOutputFileArtifact();
+            var builder = CreatePipBuilder(new[]
+            {
+                Operation.CreateHardlink(source, output, doNotInfer: true),
+            });
+            builder.AddInputDirectory(sourceDirectory);
+            builder.AddOutputFile(output.Path);
+            var producer = SchedulePipBuilder(builder).Process;
+            var consumer = CreateAndSchedulePipBuilder(new[]
+            {
+                Operation.ReadFile(output),
+                Operation.WriteFile(CreateOutputFileArtifact()),
+            }).Process;
+
+            RunScheduler().AssertSuccess().AssertCacheMiss(producer.PipId, consumer.PipId);
+            RunScheduler().AssertSuccess().AssertCacheHit(producer.PipId, consumer.PipId);
+            File.WriteAllText(ArtifactToString(unrelated), "unrelated change");
+            RunScheduler().AssertSuccess().AssertCacheHit(producer.PipId, consumer.PipId);
+
+            // Replace the prepared input without modifying an inode shared with cached outputs.
+            File.Delete(sourcePath);
+            File.WriteAllText(sourcePath, "final");
+            RunScheduler().AssertSuccess().AssertCacheMiss(producer.PipId, consumer.PipId);
+            XAssert.AreEqual("final", File.ReadAllText(ArtifactToString(output)));
+            RunScheduler().AssertSuccess().AssertCacheHit(producer.PipId, consumer.PipId);
+        }
+
         [FactIfSupported(requiresSymlinkPermission: true)]
         public void ConcurrentAccessToHardlinksPointingToSameFileViaSymlink()
         {

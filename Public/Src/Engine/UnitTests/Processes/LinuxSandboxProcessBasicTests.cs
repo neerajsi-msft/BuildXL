@@ -584,7 +584,7 @@ namespace Test.BuildXL.Processes
         public void CallTestlink()
         {
             var result = RunNativeTest(GetNativeTestName(MethodBase.GetCurrentMethod().Name));
-            AssertLogContains(GetAccessReportRegex(UsingEBPFSandbox? ReportedFileOperation.WriteFile : ReportedFileOperation.CreateHardlinkSource, Path.Combine(result.rootDirectory, "testfile")));
+            AssertLogContains(GetAccessReportRegex(UsingEBPFSandbox? ReportedFileOperation.ReadFile : ReportedFileOperation.CreateHardlinkSource, Path.Combine(result.rootDirectory, "testfile")));
             AssertLogContains(GetAccessReportRegex(UsingEBPFSandbox? ReportedFileOperation.WriteFile : ReportedFileOperation.CreateHardlinkDest, Path.Combine(result.rootDirectory, "testfile2")));
         }
 
@@ -592,7 +592,7 @@ namespace Test.BuildXL.Processes
         public void CallTestlinkat()
         {
             var result = RunNativeTest(GetNativeTestName(MethodBase.GetCurrentMethod().Name));
-            AssertLogContains(GetAccessReportRegex(UsingEBPFSandbox? ReportedFileOperation.WriteFile : ReportedFileOperation.CreateHardlinkSource, Path.Combine(result.rootDirectory, "testfile")));
+            AssertLogContains(GetAccessReportRegex(UsingEBPFSandbox? ReportedFileOperation.ReadFile : ReportedFileOperation.CreateHardlinkSource, Path.Combine(result.rootDirectory, "testfile")));
             AssertLogContains(GetAccessReportRegex(UsingEBPFSandbox? ReportedFileOperation.WriteFile : ReportedFileOperation.CreateHardlinkDest, Path.Combine(result.rootDirectory, "testfile2")));
         }
 
