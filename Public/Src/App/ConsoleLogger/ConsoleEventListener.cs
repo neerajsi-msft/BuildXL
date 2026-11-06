@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.ContractsLight;
@@ -11,8 +10,6 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
-using BuildXL.Pips;
-using BuildXL.Pips.Operations;
 using BuildXL.Utilities;
 using BuildXL.Utilities.Collections;
 using BuildXL.Utilities.Core;
@@ -659,7 +656,7 @@ namespace BuildXL
         #region PipStatus processing
 
         private readonly object m_runningPipsLock = new object();
-        private Dictionary<PipId, PipInfo> m_runningPips;
+        private readonly RunningPipTracker m_runningPips = new RunningPipTracker();
 
         /// <summary>
         /// Count of errors that have been logged
@@ -671,13 +668,6 @@ namespace BuildXL
         /// </summary>
         private long m_seeOrchestratroMessageUpdateTicker = 0;
         private const int SeeOrchestratorUpdateFrequency = 25;
-
-        private sealed class PipInfo
-        {
-            public string PipDescription;
-            public DateTime FirstSeen;
-            public DateTime LastSeen;
-        }
 
         private string GetRunningPipsMessage(string standardStatus, string perfInfo, bool waitingOnBackgroundOperations)
         {
@@ -691,32 +681,7 @@ namespace BuildXL
                 var context = m_buildViewModel.Context;
                 Contract.Assert(context != null);
 
-                if (m_runningPips == null)
-                {
-                    m_runningPips = new Dictionary<PipId, PipInfo>();
-                }
-
-                DateTime thisCollection = DateTime.UtcNow;
-
-                // Use the viewer's interface to fetch the info about which pips are currently running.
-                foreach (var pip in m_buildViewModel.RetrieveExecutingProcessPips())
-                {
-                    PipInfo runningInfo;
-                    if (!m_runningPips.TryGetValue(pip.PipId, out runningInfo))
-                    {
-                        // This is a new pip that wasn't running the last time the currently running pips were queried
-                        Pip p = pip.HydratePip();
-
-                        runningInfo = new PipInfo()
-                        {
-                            PipDescription = p.GetShortDescription(context),
-                            FirstSeen = DateTime.UtcNow,
-                        };
-                        m_runningPips.Add(pip.PipId, runningInfo);
-                    }
-
-                    runningInfo.LastSeen = DateTime.UtcNow;
-                }
+                string snapshot = m_runningPips.GetSnapshot(m_buildViewModel, m_maxStatusPips, DateTime.UtcNow);
 
                 // Build up a string based on the snapshot of what pips are being running
                 using (var pooledWrapper = Pools.StringBuilderPool.GetInstance())
@@ -740,46 +705,16 @@ namespace BuildXL
                     }
 
                     // Display backgroundTaskStatusMessage if fancyConsole option is enabled and when build is 100% complete, no process pips running, but service pips are.
-                    if (m_runningPips.Count == 0 && waitingOnBackgroundOperations)
+                    if (snapshot.Length == 0 && waitingOnBackgroundOperations)
                     {
                         sb.AppendLine();
                         sb.Append(Strings.BackgroundTaskConsoleStatusMessage);
                     }
 
-                    int pipCount = 0;
-    
-                    foreach (var item in m_runningPips.ToArray().OrderBy(kvp => kvp.Value.FirstSeen))
-                    {
-                        if (item.Value.LastSeen < thisCollection)
-                        {
-                            // If the pip was last seen before this collection it is no longer running and should be removed
-                            m_runningPips.Remove(item.Key);
-                        }
-                        else
-                        {
-                            pipCount++;
-                            if (pipCount <= m_maxStatusPips)
-                            {
-                                // Otherwise include it in the string
-                                string info = string.Format(CultureInfo.InvariantCulture, "   {0} {1}",
-                                    TimeSpanToString(TimeDisplay.Seconds, item.Value.LastSeen - item.Value.FirstSeen),
-                                    item.Value.PipDescription);
-
-                                // Don't have a trailing newline for the last message;
-                                if (sb.Length > 0)
-                                {
-                                    sb.AppendLine();
-                                }
-
-                                sb.Append(info);
-                            }
-                        }
-                    }
-
-                    if (pipCount > m_maxStatusPips)
+                    if (snapshot.Length > 0)
                     {
                         sb.AppendLine();
-                        sb.AppendFormat(Strings.ConsoleListener_AdditionalPips, pipCount - m_maxStatusPips);
+                        sb.Append(snapshot);
                     }
 
                     return sb.ToString();

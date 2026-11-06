@@ -3,10 +3,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using BuildXL;
+using BuildXL.Pips;
+using BuildXL.Pips.Operations;
 using BuildXL.ToolSupport;
+using BuildXL.Utilities.Collections;
 using BuildXL.Utilities.Core;
 using BuildXL.Utilities.Core.Tracing;
 using BuildXL.Utilities.Instrumentation.Common;
@@ -16,11 +20,93 @@ using Test.BuildXL.TestUtilities;
 using Test.BuildXL.TestUtilities.Xunit;
 using Xunit;
 using TestEvents = Test.BuildXL.Utilities.TestEvents;
+using static Test.BuildXL.TestUtilities.Xunit.XunitBuildXLTest;
 
 namespace Test.BuildXL
 {
     public class ConsoleEventListenerTests
     {
+        [Fact]
+        public void RunningPipSnapshotsTrackAgeOrderLimitsAndCompletion()
+        {
+            var context = BuildXLContext.CreateInstanceForTesting();
+            using var table = new PipTable(context.PathTable, context.SymbolTable, 1024, 1, false);
+            var oldest = CreateStatusPip(context, table, 1, "oldest");
+            var newer = CreateStatusPip(context, table, 2, "newer");
+            var running = new[] { oldest };
+            var viewModel = new BuildViewModel();
+            viewModel.SetContext(context);
+            viewModel.SetSchedulerDetails(() => running);
+            var tracker = new RunningPipTracker();
+            var start = DateTime.UtcNow;
+            tracker.GetSnapshot(viewModel, 1, start);
+
+            running = new[] { newer, oldest };
+            string snapshot = tracker.GetSnapshot(viewModel, 1, start.AddSeconds(5));
+            Assert.Contains("[0:05] oldest", snapshot);
+            Assert.DoesNotContain("newer", snapshot);
+
+            snapshot = tracker.GetSnapshot(viewModel, 2, start.AddSeconds(6));
+            Assert.True(snapshot.IndexOf("oldest", StringComparison.Ordinal) < snapshot.IndexOf("newer", StringComparison.Ordinal));
+            Assert.Contains("[0:01] newer", snapshot);
+
+            running = new[] { newer };
+            snapshot = tracker.GetSnapshot(viewModel, 2, start.AddSeconds(7));
+            Assert.DoesNotContain("oldest", snapshot);
+            Assert.Contains("[0:02] newer", snapshot);
+
+            running = Array.Empty<PipReference>();
+            Assert.Empty(tracker.GetSnapshot(viewModel, 2, start.AddSeconds(8)));
+        }
+
+        [Theory]
+        [InlineData(0, false, false)]
+        [InlineData(2, true, true)]
+        [InlineData(2, false, true)]
+        public void FileRunningPipSnapshotsArePlainTextAtStatusUpdates(int count, bool overwriteable, bool expected)
+        {
+            var context = BuildXLContext.CreateInstanceForTesting();
+            using var table = new PipTable(context.PathTable, context.SymbolTable, 1024, 1, false);
+            var pip = CreateStatusPip(context, table, 1, "fileLoggedPip");
+            var viewModel = new BuildViewModel();
+            viewModel.SetContext(context);
+            viewModel.SetSchedulerDetails(() => new[] { pip });
+            using var writer = new StringWriter();
+            using var listener = new RunningPipsEventListener(Events.Log, writer, DateTime.UtcNow, viewModel, count);
+            listener.RegisterEventSource(global::BuildXL.Scheduler.ETWLogger.Log);
+
+            global::BuildXL.Scheduler.Scheduler.LogPipStatus(
+                BuildXLTestBase.CreateLoggingContextForTest(),
+                pipsSucceeded: 0, pipsFailed: 0, pipsSkippedDueToFailedDependencies: 0,
+                pipsRunning: 1, pipsReady: 0, pipsWaiting: 0, pipsWaitingOnSemaphore: 0,
+                servicePipsRunning: 0, perfInfoForConsole: "", pipsWaitingOnResources: 0,
+                procsExecuting: 1, procsSucceeded: 0, procsFailed: 0,
+                procsSkippedDueToFailedDependencies: 0, procsPending: 0, procsWaiting: 0,
+                procsCacheHit: 0, procsNotIgnored: 1, limitingResource: "", perfInfoForLog: "",
+                overwriteable: overwriteable, copyFileDone: 0, copyFileNotDone: 0,
+                writeFileDone: 0, writeFileNotDone: 0, procsRemoted: 0);
+
+            string text = writer.ToString();
+            Assert.Equal(expected, text.Contains("Oldest running process pips:"));
+            Assert.Equal(expected, text.Contains("fileLoggedPip"));
+            Assert.DoesNotContain("\u001b", text, StringComparison.Ordinal);
+        }
+
+        private static PipReference CreateStatusPip(PipExecutionContext context, PipTable table, uint id, string name)
+        {
+            var contents = new PipDataBuilder(context.StringTable);
+            contents.Add("contents");
+            var provenance = new PipProvenance(
+                id, ModuleId.Invalid, StringId.Invalid, FullSymbol.Create(context.SymbolTable, name),
+                LocationData.Invalid, QualifierId.Unqualified, PipData.Invalid, false);
+            var pip = new WriteFile(
+                FileArtifact.CreateOutputFile(AbsolutePath.Create(context.PathTable, A("d", name))),
+                contents.ToPipData("", PipDataFragmentEscaping.NoEscaping),
+                WriteFileEncoding.Utf8, ReadOnlyArray<StringId>.Empty, provenance);
+            var pipId = table.Add(id, pip);
+            return new PipReference(table, pipId, PipQueryContext.Test);
+        }
+
         [Fact]
         public void ConsoleEventListenerBasicTest()
         {

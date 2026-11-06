@@ -1509,6 +1509,7 @@ namespace BuildXL
             // Note: this is not disposed directly because it is also within m_listeners and it gets disposed with
             // that collection
             private StatisticsEventListener m_statisticsEventListener;
+            private readonly BuildViewModel m_buildViewModel;
 
             /// <summary>
             /// The path to the log file
@@ -1543,6 +1544,7 @@ namespace BuildXL
                 m_cancellationToken = cancellationToken;
                 m_displayWarningErrorTime = displayWarningErrorTime;
                 m_notWorker = notWorker;
+                m_buildViewModel = buildViewModel;
 
                 LogPath = configuration.Log.ToString(pathTable);
                 RootLogDirectory = Path.GetDirectoryName(LogPath);
@@ -1977,10 +1979,12 @@ namespace BuildXL
                     (writer) =>
                     {
                         var eventMask = new EventMask(enabledEvents: null, disabledEvents: m_configuration.NoLog, nonMaskableLevel: EventLevel.Error);
-                        return new TextWriterEventListener(
+                        return new RunningPipsEventListener(
                             Events.Log,
                             writer,
                             m_baseTime,
+                            m_buildViewModel,
+                            m_configuration.LogRunningPips,
                             m_warningManager.GetState,
                             m_configuration.FileVerbosity.ToEventLevel(),
                             TimeDisplay.Milliseconds,

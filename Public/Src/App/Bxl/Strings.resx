@@ -679,6 +679,9 @@ Example: ad2d42d2ec5d2ca0c0b7ad65402d07c7ef40b91e</value>
   <data name="HelpText_DisplayHelp_FancyConsoleMaxStatusPips" xml:space="preserve">
     <value>Maximum number of concurrently executing pips to render in Fancy Console view. Defaults to 5.</value>
   </data>
+  <data name="HelpText_DisplayHelp_LogRunningPips" xml:space="preserve">
+    <value>Maximum number of oldest running process pips to append as plain text to periodic file status updates, independently of Fancy Console. Defaults to 0 (disabled).</value>
+  </data>
   <data name="Args_Malformed_RelatedActivityGuid" xml:space="preserve">
     <value>The specified related activity guid is not a well-formed GUID</value>
   </data>

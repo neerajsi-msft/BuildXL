@@ -22,6 +22,30 @@ namespace Test.BuildXL
     {
         private readonly string m_specFilePath = A("d", "src", "blahBlah.dsc");
 
+        [Theory]
+        [InlineData(0)]
+        [InlineData(5)]
+        public void LogRunningPipsOption(int count)
+        {
+            var argsParser = new Args();
+            XAssert.IsTrue(argsParser.TryParse(
+                new[] { "/c:" + m_specFilePath, "/logRunningPips:" + count, "/fancyConsole-" },
+                new PathTable(), out var config));
+            Assert.Equal(count, config.Logging.LogRunningPips);
+            Assert.False(config.Logging.FancyConsole);
+            Assert.Equal(count, new LoggingConfiguration(config.Logging, new PathRemapper()).LogRunningPips);
+        }
+
+        [Theory]
+        [InlineData("-1")]
+        [InlineData("invalid")]
+        public void LogRunningPipsOptionRejectsInvalidCounts(string count)
+        {
+            XAssert.IsFalse(new Args().TryParse(
+                new[] { "/c:" + m_specFilePath, "/logRunningPips:" + count },
+                new PathTable(), out var config));
+        }
+
         private readonly List<PipSpecificPropertyAndValue> m_propertiesAndValues = new List<PipSpecificPropertyAndValue>
         {
             new PipSpecificPropertyAndValue(PipSpecificPropertiesConfig.PipSpecificProperty.ForcedCacheMiss, 24 ,null),

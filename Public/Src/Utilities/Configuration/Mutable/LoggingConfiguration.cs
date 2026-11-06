@@ -133,6 +133,7 @@ namespace BuildXL.Utilities.Configuration.Mutable
             LogsToRetain = template.LogsToRetain;
             FancyConsole = template.FancyConsole;
             FancyConsoleMaxStatusPips = template.FancyConsoleMaxStatusPips;
+            LogRunningPips = template.LogRunningPips;
             SubstSource = pathRemapper.Remap(template.SubstSource);
             SubstTarget = pathRemapper.Remap(template.SubstTarget);
             DisableLoggedPathTranslation = template.DisableLoggedPathTranslation;
@@ -333,6 +334,9 @@ namespace BuildXL.Utilities.Configuration.Mutable
 
         /// <inheritdoc />
         public int FancyConsoleMaxStatusPips { get; set; }
+
+        /// <inheritdoc />
+        public int LogRunningPips { get; set; }
 
         /// <inheritdoc />
         public AbsolutePath SubstSource { get; set; }
