@@ -42,6 +42,54 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
 
         protected override bool DisableDefaultSourceResolver => true;
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void TextSourceSealOverlapsUseNativeGraphValidation(bool outputInsideSeal)
+        {
+            string output = outputInsideSeal ? "out/source/result.txt" : "out/result.txt";
+            var config = Build()
+                .Configuration("""
+                    config({
+                        resolvers: [{
+                            kind: "DirectGraph", roots: ["producer"],
+                            projects: [{ name: a`producer`, root: d`.`, graphFiles: [f`graph.dg`] }],
+                        }],
+                        mounts: [{ name: a`out`, path: p`out`, isWritable: true, isReadable: true, trackSourceFileChanges: true }],
+                    });
+                    """)
+                .AddFile("graph.dg", $$"""
+                    directgraph 2
+                    path 0 {{JsonSerializer.Serialize(OperatingSystemHelper.IsWindowsOS ? CmdHelper.CmdX64 : CmdHelper.Bash)}}
+                    path 1 "."
+                    path 2 "out"
+                    path 3 "out/source"
+                    path 4 "{{output}}"
+                    process produce
+                      executable $p0
+                      workingDirectory $p1
+                      outputDirectory $p2 shared
+                      output $p4
+                    sealDirectory source
+                      directoryRoot $p3
+                      sealKind sourceAllDirectories
+                    """)
+                .AddFile("out/source/input.txt", "source")
+                .PersistSpecsAndGetConfiguration();
+            var mutable = (CommandLineConfiguration)config;
+            mutable.Engine.Phase = EnginePhases.Schedule;
+            mutable.DisableInBoxSdkSourceResolver = true;
+            using var tempFiles = new TempFileStorage(canGetFileNames: true, rootPath: TestOutputDirectory);
+            var result = CreateAndRunEngine(config, CreateAppDeployment(tempFiles), testRootDirectory: null,
+                rememberAllChangedTrackedInputs: true, engine: out _);
+            Assert.Equal(!outputInsideSeal, result.IsSuccess);
+            if (outputInsideSeal)
+            {
+                AssertErrorEventLogged(global::BuildXL.Pips.Tracing.LogEventId.InvalidGraphSinceSourceSealedDirectoryContainsOutputFile);
+            }
+            Assert.False(File.Exists(Path.Combine(TestRoot, output)));
+        }
+
         [FactIfSupported(requiresLinuxBasedOperatingSystem: true)]
         public void KatiGeneratedProjectFragmentsExecute()
         {

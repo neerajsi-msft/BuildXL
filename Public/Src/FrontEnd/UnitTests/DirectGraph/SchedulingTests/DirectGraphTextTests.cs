@@ -665,13 +665,34 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
-        public async Task SourceSealsCannotMaskGeneratedOutputRegionsInEitherLoadOrder(bool sourceFirst)
+        public async Task SourceSealOutputOverlapIsDeferredToNativeGraphValidation(bool sourceFirst)
         {
             var source = Project("source", "directgraph 2\npath 0 \"out\"\nsealDirectory s\n  directoryRoot $p0\n  sealKind sourceAllDirectories");
             var generated = Project("generated", "directgraph 2\npath 0 \"out/a\"\nstring 0 \"a\"\nwriteFile w\n  destination $p0\n  content $s0");
-            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(
-                sourceFirst ? new[] { source, generated } : new[] { generated, source }));
-            Assert.Contains("overlap", error.Message);
+            await Load(sourceFirst ? new[] { source, generated } : new[] { generated, source });
+            Assert.Contains(m_operations, operation => operation.AddWriteFile != null);
+            Assert.Contains(m_operations, operation => operation.AddSealDirectory != null);
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task SourceSealsInsideSharedOpaquesArePassedToNativeConstruction(bool sourceFirst)
+        {
+            var source = Project("source", "directgraph 2\npath 0 \"out/src\"\nsealDirectory s\n  directoryRoot $p0\n  sealKind sourceAllDirectories");
+            var generated = Project("generated", """
+                directgraph 2
+                path 0 "tool"
+                path 1 "."
+                path 2 "out"
+                process produce
+                  executable $p0
+                  workingDirectory $p1
+                  outputDirectory $p2 shared
+                """);
+            await Load(sourceFirst ? new[] { source, generated } : new[] { generated, source });
+            Assert.Contains(m_operations, operation => operation.AddProcess != null);
+            Assert.Contains(m_operations, operation => operation.AddSealDirectory != null);
         }
 
         [Fact]
@@ -987,12 +1008,17 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             var selected = Project("selected", """
                 directgraph 2
                 path 0 "src"
+                path 1 "src/generated.h"
+                path 2 "result/copied"
                 sealDirectory source
                   directoryRoot $p0
                   sealKind sourceAllDirectories
+                copyFile read
+                  source $p1
+                  destination $p2
                 """);
             var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { ignored, selected }, new[] { "selected" }));
-            Assert.Contains("overlaps generated outputs", error.Message);
+            Assert.Contains("not exported by a declared dependency", error.Message);
             Assert.Equal(new[] { Absolute("selected.dg") }, m_opened);
         }
 

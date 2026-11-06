@@ -66,8 +66,6 @@ namespace BuildXL.FrontEnd.DirectGraph
         {
             internal readonly object SyncRoot = new();
             internal readonly Dictionary<string, FileBinding> Files = new(s_paths);
-            internal readonly List<DirectoryBinding> Directories = new();
-            internal readonly List<DirectoryBinding> SourceDirectories = new();
             internal readonly HashSet<string> DynamicRoots = new(s_paths);
             internal readonly Dictionary<string, string> ExplicitTempDirectories = new(s_paths);
             internal readonly Dictionary<string, string> SourceFiles = new(s_paths);
@@ -274,15 +272,14 @@ namespace BuildXL.FrontEnd.DirectGraph
                     seal.Patterns.AddRange(fields.Values("pattern").Select(StringValue));
                     seal.SourceExclusions.AddRange(fields.Values("sourceExclusion").Select(StringValue));
                     Description(fields, value => seal.Description = value);
-                    bool sourceSeal = seal.Kind.IsSourceSeal();
-                    if (sourceSeal)
+                    if (seal.Kind.IsSourceSeal())
                     {
                         if (members.Count > 0 || seal.OutputDirectoryContents.Count > 0)
                         {
                             throw new InvalidDataException("Source seals cannot contain generated artifacts.");
                         }
                     }
-                    AddDirectory(project, new DirectoryBinding(project, record.Name, root, false, sourceSeal, members: members, kind: seal.Kind));
+                    AddDirectory(project, new DirectoryBinding(project, record.Name, root, false, members: members, kind: seal.Kind));
                     operation = seal;
                     break;
                 case "composeSharedOpaque":
@@ -716,10 +713,6 @@ namespace BuildXL.FrontEnd.DirectGraph
                 }
             }
             EnsureNoTempOverlap(path, "Generated output");
-            if (m_state.SourceDirectories.Any(directory => Within(path, directory.Path)))
-            {
-                throw new InvalidDataException($"Generated output '{path}' overlaps a source seal.");
-            }
             if (m_state.Files.TryGetValue(path, out var previous) && (!rewrite || previous.Owner != project))
             {
                 throw new InvalidDataException($"Duplicate file ownership at '{path}'.");
@@ -741,32 +734,17 @@ namespace BuildXL.FrontEnd.DirectGraph
 
         private void AddDirectoryCore(Project project, DirectoryBinding directory)
         {
-            if (directory.Source &&
-                (m_state.Files.Keys.Concat(m_state.ConfiguredOutputs).Any(path => Within(path, directory.Path)) ||
-                 m_state.Directories.Any(output => output.Dynamic && Overlaps(output.Path, directory.Path))))
-            {
-                throw new InvalidDataException($"Source seal '{directory.Path}' overlaps generated outputs.");
-            }
             if (directory.Dynamic)
             {
                 EnsureNoSourceBinding(directory.Path, directory: true);
                 EnsureNoTempOverlap(directory.Path, "Generated directory");
-            }
-            if (directory.Dynamic && m_state.SourceDirectories.Any(source => Overlaps(source.Path, directory.Path)))
-            {
-                throw new InvalidDataException($"Generated directory '{directory.Path}' overlaps a source seal.");
             }
             if (!project.Directories.TryGetValue(directory.Path, out var directories))
             {
                 project.Directories.Add(directory.Path, directories = new List<DirectoryBinding>());
             }
             directories.Add(directory);
-            m_state.Directories.Add(directory);
             m_pendingDirectories.Add(directory);
-            if (directory.Source)
-            {
-                m_state.SourceDirectories.Add(directory);
-            }
             if (directory.Dynamic)
             {
                 m_state.DynamicRoots.Add(directory.Path);
@@ -947,20 +925,18 @@ namespace BuildXL.FrontEnd.DirectGraph
             public string Path { get; }
             public AbsolutePath AbsolutePath { get; set; }
             public bool Dynamic { get; }
-            public bool Source { get; }
             public HashSet<(Project Owner, string Symbol)> Producers { get; }
             public DirectoryArtifact Artifact { get; set; }
             public GraphSealDirectoryKind Kind { get; }
             public Dictionary<string, FileBinding> Members { get; }
             public DirectoryBinding(Project owner, string symbol, string path, bool dynamic,
-                bool source = false, Dictionary<string, FileBinding> members = null,
+                Dictionary<string, FileBinding> members = null,
                 HashSet<(Project Owner, string Symbol)> producers = null, GraphSealDirectoryKind? kind = null)
             {
                 Owner = owner;
                 Symbol = symbol;
                 Path = path;
                 Dynamic = dynamic;
-                Source = source;
                 Producers = producers ?? new HashSet<(Project Owner, string Symbol)> { (owner, symbol) };
                 Kind = kind ?? (dynamic ? GraphSealDirectoryKind.SharedOpaque : GraphSealDirectoryKind.Partial);
                 Members = members ?? new Dictionary<string, FileBinding>(s_paths);
