@@ -976,6 +976,38 @@ namespace Test.BuildXL.Processes
             XAssert.IsNotNull(expectedAccess, $"Expected to find an access to {expectedPath} in the unexpected accesses: {string.Join(Environment.NewLine, result.FileAccesses?.Select(a => a.Path) ?? Array.Empty<string>())}");
         }
 
+        [Fact]
+        public async Task CurrentTaskPidIsTranslatedInRunnerNamespace()
+        {
+            string executable = SandboxedProcessUnix.EnsureDeploymentFile("RingBufferTest/pid_namespace_test");
+            XAssert.IsTrue(UnixGetCapUtils.TrySetEBPFCapabilitiesIfNeeded(executable, interactive: false, out _));
+            var manifest = new FileAccessManifest(Context.PathTable)
+            {
+                FailUnexpectedFileAccesses = false,
+                ReportFileAccesses = true,
+                MonitorChildProcesses = true,
+                PipId = 1,
+            };
+            var info = new SandboxedProcessInfo(
+                Context.PathTable,
+                new TempFileStorage(canGetFileNames: true, rootPath: TemporaryDirectory),
+                executable,
+                manifest,
+                disableConHostSharing: false,
+                loggingContext: LoggingContext,
+                useGentleKill: true)
+            {
+                Arguments = "--expect-current-pid -1",
+                WorkingDirectory = TemporaryDirectory,
+                PipSemiStableHash = manifest.PipId,
+                PipDescription = "EBPF runner namespace visibility test",
+                SandboxConnection = new SandboxConnectionLinuxEBPF(isInTestMode: true),
+            };
+            using var process = await SandboxedProcessFactory.StartAsync(info, forceSandboxing: true);
+            var result = await process.GetResultAsync().WithTimeoutAsync(TimeSpan.FromSeconds(10));
+            AssertExitCode(result, 0);
+        }
+
         [Theory]
         [InlineData(1)]
         [InlineData(4)]

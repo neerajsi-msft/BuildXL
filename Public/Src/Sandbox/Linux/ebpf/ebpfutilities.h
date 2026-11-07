@@ -1804,12 +1804,6 @@ __attribute__((always_inline)) static inline void report_ring_buffer_error_unkno
 __attribute__((always_inline)) static pid_t bpf_get_ns_pid(struct task_struct *task) {
     int level = BPF_CORE_READ(task, thread_pid, level);
 
-    // Level 0 means we're in the initial namespace. That means the userspace runner cannot be in a different one. 
-    // So we can return the regular tgid and avoid more expensive lookups
-    if (level == 0) {
-        return BPF_CORE_READ(task, tgid);
-    }
-
     // Get the runner's namespace level (pre-populated by userspace)
     int* runner_ns_level = bpf_map_lookup_elem(&runner_pid_level, &ZERO);
     if (!runner_ns_level) {
@@ -1823,6 +1817,12 @@ __attribute__((always_inline)) static pid_t bpf_get_ns_pid(struct task_struct *t
     if (*runner_ns_level > level) {
         // This means we are looking at a task that is not in the hierarchy of the runner. So we are sure we are not interested.
         return 0;
+    }
+
+    // Kernel probes also see host tasks when the runner is in a container.
+    // Only take the initial-namespace fast path after checking runner visibility.
+    if (level == 0) {
+        return BPF_CORE_READ(task, tgid);
     }
 
     // Get the pid structure from the task's group leader.

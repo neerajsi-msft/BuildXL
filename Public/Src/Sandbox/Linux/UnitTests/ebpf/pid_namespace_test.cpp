@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <errno.h>
+#include "test_utils.hpp"
 
 /**
  * Test binary that exercises PID namespace translation in the eBPF sandbox.
@@ -92,6 +93,28 @@ int child_main(const char *base_path, int num_threads) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 3 && strcmp(argv[1], "--expect-current-pid") == 0) {
+        int expected_pid = atoi(argv[2]);
+        if (expected_pid == -1) {
+            expected_pid = getpid();
+        }
+        int program_fd = GetTestProgramFd("test_get_current_ns_pid");
+        if (program_fd < 0) {
+            fprintf(stderr, "PID namespace test query is not loaded\n");
+            return 1;
+        }
+        LIBBPF_OPTS(bpf_test_run_opts, opts);
+        int error = bpf_prog_test_run_opts(program_fd, &opts);
+        close(program_fd);
+        if (error) {
+            fprintf(stderr, "PID namespace query failed: %s\n", strerror(errno));
+            return 1;
+        }
+        fprintf(stdout, "Runner-namespace PID: %u; caller PID: %d; expected: %d\n",
+                opts.retval, getpid(), expected_pid);
+        return opts.retval == (unsigned int)expected_pid ? 0 : 1;
+    }
+
     if (argc < 3) {
         fprintf(stderr, "Usage: %s <path_to_stat> <num_threads>\n", argv[0]);
         return 1;

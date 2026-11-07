@@ -2024,6 +2024,12 @@ int get_current_namespace_level() {
     return level;
 }
 
+/** Read-only test query for the caller's PID as seen by the runner namespace. */
+SEC("syscall")
+int test_get_current_ns_pid() {
+    return bpf_get_current_ns_pid();
+}
+
 /**
  * Test program to write a test message to the ring buffer.
  * Not actually tracing anything, this gets called with bpf_prog_test_run_opts from user side for testing purposes. 

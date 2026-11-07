@@ -100,8 +100,8 @@ namespace Test.eBPFSandbox {
             Native.Linux.Compilers.link({
                 outputName: a`pid_namespace_test`,
                 tool: Native.Linux.Compilers.gxxTool,
-                objectFiles: [...pidNamespaceTestObj],
-                libraries: [ "pthread" ]
+                objectFiles: [...pidNamespaceTestObj, EBPF.eBPFSandbox.libbpfa],
+                libraries: [ "pthread", "elf", "z" ]
             })
         : undefined;
 }
