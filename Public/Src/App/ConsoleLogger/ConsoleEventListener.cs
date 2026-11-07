@@ -33,6 +33,7 @@ namespace BuildXL
         private readonly IConsole m_console;
 
         private readonly int m_maxStatusPips;
+        private readonly int m_consoleRunningPips;
 
         /// <summary>
         /// Some console logging behaviors should only be enabled when the build is not a worker
@@ -108,6 +109,9 @@ namespace BuildXL
         /// <param name="optimizeForAzureDevOps">
         /// Whether console output should e optimized for Azure DevOps output.
         /// </param>
+        /// <param name="consoleRunningPips">
+        /// Maximum number of oldest running process pips to append to non-Fancy console status updates.
+        /// </param>
         [SuppressMessage("Microsoft.Reliability", "CA2000:DisposeObjectsBeforeLosingScope")]
         public ConsoleEventListener(
             Events eventSource,
@@ -124,7 +128,8 @@ namespace BuildXL
             DisabledDueToDiskWriteFailureEventHandler onDisabledDueToDiskWriteFailure = null,
             PathTranslator pathTranslator = null,
             int maxStatusPips = DefaultMaxStatusPips,
-            bool optimizeForAzureDevOps = false)
+            bool optimizeForAzureDevOps = false,
+            int consoleRunningPips = 0)
             : this(
                 eventSource,
                 new StandardConsole(colorize, animateTaskbar, updatingConsole, pathTranslator),
@@ -137,7 +142,8 @@ namespace BuildXL
                 eventMask: eventMask,
                 onDisabledDueToDiskWriteFailure: onDisabledDueToDiskWriteFailure,
                 maxStatusPips: maxStatusPips,
-                optimizeForAzureDevOps: optimizeForAzureDevOps)
+                optimizeForAzureDevOps: optimizeForAzureDevOps,
+                consoleRunningPips: consoleRunningPips)
         {
         }
 
@@ -185,6 +191,9 @@ namespace BuildXL
         /// <param name="optimizeForAzureDevOps">
         /// Whether console output should be optimized for Azure DevOps output.
         /// </param>
+        /// <param name="consoleRunningPips">
+        /// Maximum number of oldest running process pips to append to non-Fancy console status updates.
+        /// </param>
         public ConsoleEventListener(
             Events eventSource,
             IConsole console,
@@ -198,14 +207,17 @@ namespace BuildXL
             EventMask eventMask = null,
             DisabledDueToDiskWriteFailureEventHandler onDisabledDueToDiskWriteFailure = null,
             int maxStatusPips = DefaultMaxStatusPips,
-            bool optimizeForAzureDevOps = false)
+            bool optimizeForAzureDevOps = false,
+            int consoleRunningPips = 0)
             : base(eventSource, baseTime, warningMapper, level, false, TimeDisplay.Seconds, eventMask, onDisabledDueToDiskWriteFailure, useCustomPipDescription: useCustomPipDescription)
         {
             Contract.Requires(eventSource != null);
             Contract.Requires(console != null);
+            Contract.Requires(consoleRunningPips >= 0);
 
             m_console = console;
             m_maxStatusPips = maxStatusPips;
+            m_consoleRunningPips = consoleRunningPips;
             m_cancellationToken = cancellationToken;
             m_logsDirectory = logsDirectory;
             m_notWorker = notWorker;
@@ -399,8 +411,21 @@ namespace BuildXL
                             updatingStatus = GetRunningPipsMessage(standardStatus, perfInfo, waitingOnBackgroundOperations);
                         }
 
+                        string statusSuffix = null;
+                        if (!m_console.UpdatingConsole && m_consoleRunningPips > 0 && m_buildViewModel?.Context != null)
+                        {
+                            lock (m_runningPipsLock)
+                            {
+                                string snapshot = m_runningPips.GetSnapshot(m_buildViewModel, m_consoleRunningPips, DateTime.UtcNow);
+                                if (snapshot.Length > 0)
+                                {
+                                    statusSuffix = Environment.NewLine + "Oldest running process pips:" + Environment.NewLine + snapshot;
+                                }
+                            }
+                        }
+
                         bool allowStatusThrottling = m_optimizeForAzureDevOps && eventData.EventId != (int)BuildXL.Scheduler.Tracing.LogEventId.PipStatusNonOverwriteable;
-                        SendToConsole(eventData, "info", standardStatus, allowStatusThrottling: allowStatusThrottling, updatableMessage: updatingStatus);
+                        SendToConsole(eventData, "info", standardStatus, allowStatusThrottling: allowStatusThrottling, updatableMessage: updatingStatus, statusSuffix: statusSuffix);
                     }
 
                     if (m_notWorker)
@@ -585,7 +610,7 @@ namespace BuildXL
             return format;
         }
 
-        private void SendToConsole(EventWrittenEventArgs eventData, string label, string message, bool allowStatusThrottling, string updatableMessage = null)
+        private void SendToConsole(EventWrittenEventArgs eventData, string label, string message, bool allowStatusThrottling, string updatableMessage = null, string statusSuffix = null)
         {
             if (allowStatusThrottling && m_statusMessageThrottler.ShouldThrottleStatusUpdate())
             {
@@ -594,6 +619,7 @@ namespace BuildXL
             }
 
             string finalMessage = CreateFullMessageString(eventData, label, message, BaseTime, UseCustomPipDescription, TimeDisplay.Seconds);
+            finalMessage += statusSuffix;
 
             var keyWords = eventData.Keywords;
 

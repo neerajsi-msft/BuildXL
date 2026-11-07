@@ -1757,6 +1757,7 @@ namespace BuildXL
                     m_noLogMask,
                     onDisabledDueToDiskWriteFailure: OnListenerDisabledDueToDiskWriteFailure,
                     maxStatusPips: m_configuration.FancyConsoleMaxStatusPips,
+                    consoleRunningPips: m_configuration.ConsoleRunningPips,
                     optimizeForAzureDevOps: m_configuration.OptimizeConsoleOutputForAzureDevOps || m_configuration.OptimizeVsoAnnotationsForAzureDevOps);
                 listener.SetBuildViewModel(buildViewModel);
 

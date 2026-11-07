@@ -344,6 +344,11 @@ namespace BuildXL
                 HelpLevel.Verbose);
 
             hw.WriteOption(
+                "/consoleRunningPips:<number>",
+                Strings.HelpText_DisplayHelp_ConsoleRunningPips,
+                HelpLevel.Verbose);
+
+            hw.WriteOption(
                 "/profileScript[+|-]",
                 Strings.HelpText_DisplayHelp_ProfileScript,
                 HelpLevel.Verbose);

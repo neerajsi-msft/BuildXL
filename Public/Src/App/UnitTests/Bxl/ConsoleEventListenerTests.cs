@@ -107,6 +107,58 @@ namespace Test.BuildXL
             return new PipReference(table, pipId, PipQueryContext.Test);
         }
 
+        [Theory]
+        [InlineData(0, false, false, false, false)]
+        [InlineData(5, false, false, false, true)]
+        [InlineData(5, false, true, false, true)]
+        [InlineData(5, true, false, false, false)]
+        [InlineData(5, true, true, false, false)]
+        [InlineData(5, false, true, true, false)]
+        public void ConsoleRunningPipSnapshotsRespectCountAndEventFilters(
+            int count, bool filtered, bool overwriteable, bool updatingConsole, bool expected)
+        {
+            var context = BuildXLContext.CreateInstanceForTesting();
+            using var table = new PipTable(context.PathTable, context.SymbolTable, 1024, 1, false);
+            var pips = Enumerable.Range(1, 6).Select(i => CreateStatusPip(context, table, (uint)i, "consolePip" + i)).ToArray();
+            var viewModel = new BuildViewModel();
+            viewModel.SetContext(context);
+            viewModel.SetSchedulerDetails(() => pips);
+            using var console = new MockConsole { UpdatingConsole = updatingConsole };
+            var mask = filtered ? new EventMask(
+                enabledEvents: null,
+                disabledEvents: new[] { overwriteable
+                    ? (int)SharedLogEventId.PipStatus
+                    : (int)global::BuildXL.Scheduler.Tracing.LogEventId.PipStatusNonOverwriteable },
+                nonMaskableLevel: System.Diagnostics.Tracing.EventLevel.Error) : null;
+            using var listener = new ConsoleEventListener(
+                Events.Log, console, DateTime.UtcNow, false, CancellationToken.None,
+                eventMask: mask, consoleRunningPips: count);
+            listener.SetBuildViewModel(viewModel);
+            listener.RegisterEventSource(global::BuildXL.Scheduler.ETWLogger.Log);
+
+            global::BuildXL.Scheduler.Scheduler.LogPipStatus(
+                BuildXLTestBase.CreateLoggingContextForTest(),
+                pipsSucceeded: 0, pipsFailed: 0, pipsSkippedDueToFailedDependencies: 0,
+                pipsRunning: 6, pipsReady: 0, pipsWaiting: 0, pipsWaitingOnSemaphore: 0,
+                servicePipsRunning: 0, perfInfoForConsole: "", pipsWaitingOnResources: 0,
+                procsExecuting: 6, procsSucceeded: 0, procsFailed: 0,
+                procsSkippedDueToFailedDependencies: 0, procsPending: 0, procsWaiting: 0,
+                procsCacheHit: 0, procsNotIgnored: 6, limitingResource: "", perfInfoForLog: "",
+                overwriteable: overwriteable, copyFileDone: 0, copyFileNotDone: 0,
+                writeFileDone: 0, writeFileNotDone: 0, procsRemoted: 0);
+
+            string text = string.Join(Environment.NewLine, console.Messages);
+            Assert.Equal(expected, text.Contains("Oldest running process pips:"));
+            Assert.Equal(expected || updatingConsole, text.Contains("consolePip1"));
+            Assert.Equal(expected || updatingConsole, text.Contains("consolePip5"));
+            Assert.DoesNotContain("consolePip6", text);
+            Assert.DoesNotContain("\u001b", text, StringComparison.Ordinal);
+            if (filtered)
+            {
+                Assert.Empty(console.Messages);
+            }
+        }
+
         [Fact]
         public void ConsoleEventListenerBasicTest()
         {

@@ -647,6 +647,9 @@ namespace BuildXL
                             "logRunningPips",
                             opt => loggingConfiguration.LogRunningPips = CommandLineUtilities.ParseInt32Option(opt, 0, int.MaxValue)),
                         OptionHandlerFactory.CreateOption(
+                            "consoleRunningPips",
+                            opt => loggingConfiguration.ConsoleRunningPips = CommandLineUtilities.ParseInt32Option(opt, 0, int.MaxValue)),
+                        OptionHandlerFactory.CreateOption(
                             "logsDirectory",
                             opt => loggingConfiguration.LogsDirectory = CommandLineUtilities.ParsePathOption(opt, pathTable)),
                         OptionHandlerFactory.CreateOption(

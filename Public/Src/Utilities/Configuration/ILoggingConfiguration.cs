@@ -275,6 +275,11 @@ namespace BuildXL.Utilities.Configuration
         int LogRunningPips { get; }
 
         /// <summary>
+        /// Maximum number of oldest running process pips included in plain-text console status snapshots. Zero disables snapshots.
+        /// </summary>
+        int ConsoleRunningPips { get; }
+
+        /// <summary>
         /// Original root that is being substituted to <see cref="SubstTarget"/>. This configuration is currently only
         /// used for the sake of logging. It is expected that the path has been mapped to <see cref="SubstTarget"/>
         /// before this process starts.

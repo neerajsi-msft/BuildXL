@@ -46,6 +46,29 @@ namespace Test.BuildXL
                 new PathTable(), out var config));
         }
 
+        [Theory]
+        [InlineData(0)]
+        [InlineData(5)]
+        public void ConsoleRunningPipsOption(int count)
+        {
+            XAssert.IsTrue(new Args().TryParse(
+                new[] { "/c:" + m_specFilePath, "/consoleRunningPips:" + count, "/fancyConsole-" },
+                new PathTable(), out var config));
+            Assert.Equal(count, config.Logging.ConsoleRunningPips);
+            Assert.Equal(0, config.Logging.LogRunningPips);
+            Assert.Equal(count, new LoggingConfiguration(config.Logging, new PathRemapper()).ConsoleRunningPips);
+        }
+
+        [Theory]
+        [InlineData("-1")]
+        [InlineData("invalid")]
+        public void ConsoleRunningPipsOptionRejectsInvalidCounts(string count)
+        {
+            XAssert.IsFalse(new Args().TryParse(
+                new[] { "/c:" + m_specFilePath, "/consoleRunningPips:" + count },
+                new PathTable(), out var config));
+        }
+
         private readonly List<PipSpecificPropertyAndValue> m_propertiesAndValues = new List<PipSpecificPropertyAndValue>
         {
             new PipSpecificPropertyAndValue(PipSpecificPropertiesConfig.PipSpecificProperty.ForcedCacheMiss, 24 ,null),
