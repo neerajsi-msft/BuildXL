@@ -270,7 +270,7 @@ namespace BuildXL.Pips.Operations
         {
             var b = bytes[index++];
             var entryType = (PipDataEntryType)(b >> 4);
-            Contract.Assume((b & 15) <= (int)PipDataFragmentEscaping.CRuntimeArgumentRules);
+            Contract.Assume((b & 15) <= (int)PipDataFragmentEscaping.EscapeEachArgument);
             var escaping = (PipDataFragmentEscaping)(b & 15);
 
             var data = Bits.ReadInt32(bytes, ref index);
@@ -348,7 +348,7 @@ namespace BuildXL.Pips.Operations
                     break;
             }
 
-            Contract.Assume((b & 15) <= (int)PipDataFragmentEscaping.CRuntimeArgumentRules);
+            Contract.Assume((b & 15) <= (int)PipDataFragmentEscaping.EscapeEachArgument);
             var escaping = (PipDataFragmentEscaping)(b & 15);
             return new PipDataEntry(escaping, entryType, data);
         }

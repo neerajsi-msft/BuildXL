@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using BuildXL.Engine.DirectGraph;
@@ -209,14 +208,12 @@ namespace BuildXL.FrontEnd.DirectGraph
                         Symbol = record.Name,
                         Destination = PathValue(destination),
                     };
-                    var content = fields.Rows("content");
-                    if (content.Count != 1)
+                    var dataContent = fields.DataRows("content");
+                    if (dataContent.Count != 1)
                     {
                         throw new InvalidDataException("Field 'content' must occur exactly once.");
                     }
-                    var contentBuilder = new PipDataBuilder(m_pathTable.StringTable);
-                    foreach (string part in content[0]) contentBuilder.Add(part);
-                    write.Content = contentBuilder.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping);
+                    write.Content = CreatePipData(project, dataContent[0].Expression);
                     Description(fields, value => write.Description = value);
                     ClaimFile(project, destination, record.Name);
                     operation = write;
@@ -376,32 +373,24 @@ namespace BuildXL.FrontEnd.DirectGraph
                 AddInputDirectory(process, ResolveDirectory(project, values));
             }
             process.Executable = ResolveFile(project, Absolute(project, fields.One("executable", required: true)), process).Artifact;
-            var argumentRows = fields.Rows("argument");
+            var completeArguments = fields.DataRows("arguments");
             var arguments = new PipDataBuilder(m_pathTable.StringTable);
-            if (argumentRows.Any(row => row.Length > 1))
+            if (completeArguments.Count > 0)
             {
-                var builder = new PipDataBuilder(m_pathTable.StringTable);
-                foreach (var row in argumentRows)
-                {
-                    using (builder.StartFragment(PipDataFragmentEscaping.NoEscaping, string.Empty))
-                    {
-                        // PipData escapes leaves, not whole nested groups. Escape the complete argument before
-                        // factoring its rendered spelling so quotes and backslashes across chunks remain correct.
-                        string escaped = CommandLineEscaping.EscapeAsCommandLineWord(string.Concat(row));
-                        foreach (Match part in Regex.Matches(escaped, @"\s+|[""'`]|[^\s""'`]+"))
-                        {
-                            builder.Add(part.Value);
-                        }
-                    }
-                }
-                arguments.Add(builder.ToPipData(" ", PipDataFragmentEscaping.CRuntimeArgumentRules));
+                if (completeArguments.Count != 1)
+                    throw new InvalidDataException("A process requires one arguments expression.");
+                var expression = completeArguments[0].Expression;
+                if (expression.Kind != "concat")
+                    throw new InvalidDataException("An arguments expression must be a concat.");
+                foreach (var child in expression.Children) AppendExpression(project, arguments, child);
+                process.Arguments = arguments.ToPipData(expression.Value, expression.EscapeArguments ?
+                    PipDataFragmentEscaping.EscapeEachArgument : PipDataFragmentEscaping.NoEscaping);
             }
-            else
-            {
-                foreach (string value in argumentRows.SelectMany(row => row)) arguments.Add(value);
-            }
-            process.Arguments = arguments.ToPipData(" ", PipDataFragmentEscaping.CRuntimeArgumentRules);
-            Description(fields, value => process.Description = value);
+            if (completeArguments.Count == 0)
+                process.Arguments = arguments.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping);
+            var usage = fields.DataRows("description");
+            if (usage.Count > 1) throw new InvalidDataException("Field 'description' must occur at most once.");
+            if (usage.Count == 1) process.Usage = CreatePipData(project, usage[0].Expression);
             string temp = fields.One("tempDirectory");
             if (temp != null)
             {
@@ -430,14 +419,14 @@ namespace BuildXL.FrontEnd.DirectGraph
                 process.Semaphores.Add(new DirectGraphSemaphore(StringValue(values[0]), limit, increment));
             }
             var environment = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var values in fields.Rows("environment"))
+            foreach (var row in fields.DataRows("environment"))
             {
-                Arity(values, 2);
-                if (string.IsNullOrEmpty(values[0]) || values[0].Contains('=') || !environment.Add(values[0]))
-                {
-                    throw new InvalidDataException($"Invalid or duplicate environment name '{values[0]}'.");
-                }
-                process.EnvironmentVariables.Add(new DirectGraphEnvironmentVariable(StringValue(values[0]), StringValue(values[1])));
+                Arity(row.Parameters, 1);
+                string variable = row.Parameters[0];
+                if (string.IsNullOrEmpty(variable) || variable.Contains('=') || !environment.Add(variable))
+                    throw new InvalidDataException($"Invalid or duplicate environment name '{variable}'.");
+                process.EnvironmentVariables.Add(new DirectGraphEnvironmentVariable(
+                    StringValue(variable), Data: CreatePipData(project, row.Expression)));
             }
             foreach (string variable in fields.Values("passthroughEnvironment"))
             {
@@ -501,6 +490,35 @@ namespace BuildXL.FrontEnd.DirectGraph
                 process.OutputDirectories.Add(new DirectGraphDirectoryOutput(PathValue(absolute), kind));
             }
             return process;
+        }
+
+        private PipData CreatePipData(Project project, DirectGraphTextExpression expression)
+        {
+            var builder = new PipDataBuilder(m_pathTable.StringTable);
+            AppendExpression(project, builder, expression);
+            return builder.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping);
+        }
+
+        private void AppendExpression(Project project, PipDataBuilder builder, DirectGraphTextExpression expression)
+        {
+            switch (expression.Kind)
+            {
+                case "stringRef":
+                    builder.Add(expression.Value);
+                    break;
+                case "pathRef":
+                    builder.Add(AbsolutePath.Create(m_pathTable, Absolute(project, expression.Value)));
+                    break;
+                case "concat":
+                    using (builder.StartFragment(expression.EscapeArguments ?
+                        PipDataFragmentEscaping.EscapeEachArgument : PipDataFragmentEscaping.NoEscaping, expression.Value))
+                    {
+                        foreach (var child in expression.Children) AppendExpression(project, builder, child);
+                    }
+                    break;
+                default:
+                    throw new InvalidDataException($"Unknown PipData expression '{expression.Kind}'.");
+            }
         }
 
         /// <summary>Returns null for an unlisted ordinary input whose dependency is supplied by an opaque directory.</summary>
@@ -860,6 +878,8 @@ namespace BuildXL.FrontEnd.DirectGraph
             public Fields(DirectGraphTextRecord record) => m_record = record;
             public IReadOnlyList<string[]> Rows(string name) =>
                 m_record.Fields.Remove(name, out var rows) ? rows : Array.Empty<string[]>();
+            public IReadOnlyList<DirectGraphTextDataField> DataRows(string name) =>
+                m_record.PipDataFields.Remove(name, out var rows) ? rows : Array.Empty<DirectGraphTextDataField>();
             public IEnumerable<string> Values(string name)
             {
                 var rows = Rows(name);
@@ -888,9 +908,9 @@ namespace BuildXL.FrontEnd.DirectGraph
             }
             public void EnsureConsumed()
             {
-                if (m_record.Fields.Count != 0)
+                if (m_record.Fields.Count != 0 || m_record.PipDataFields.Count != 0)
                 {
-                    throw new InvalidDataException($"Unknown field(s): {string.Join(", ", m_record.Fields.Keys)}.");
+                    throw new InvalidDataException($"Unknown field(s): {string.Join(", ", m_record.Fields.Keys.Concat(m_record.PipDataFields.Keys))}.");
                 }
             }
         }

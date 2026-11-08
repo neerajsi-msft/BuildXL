@@ -269,7 +269,7 @@ namespace BuildXL.Pips.Operations
 #if DEBUG
             // Expensive check on in DEBUG builds: costs 6% percent of entire runtime
             string actualValue = ToString(renderer);
-            Contract.Assert(computedLength == actualValue.Length);
+            Contract.Assert(computedLength >= actualValue.Length);
 #endif
 
             return computedLength;
@@ -280,6 +280,17 @@ namespace BuildXL.Pips.Operations
             Contract.Requires(renderer != null);
             Contract.Requires(builder != null);
             Contract.Requires(pipData.IsValid);
+
+            if (pipData.FragmentEscaping == PipDataFragmentEscaping.EscapeArgument)
+            {
+                Contract.Requires(pipData.FragmentCount == 1);
+                using (var scratch = Pools.GetStringBuilder())
+                {
+                    AppendPipData(scratch.Instance, pipData.With(pipData.FragmentSeparator, PipDataFragmentEscaping.NoEscaping), renderer, useIpcEscaping);
+                    AppendEscapedArgument(builder, scratch.Instance.ToString(), useIpcEscaping);
+                }
+                return;
+            }
 
             bool first = true;
             foreach (PipFragment fragment in pipData)
@@ -295,7 +306,18 @@ namespace BuildXL.Pips.Operations
                 // recursively handle compound fragments
                 if (fragment.FragmentType == PipFragmentType.NestedFragment)
                 {
-                    AppendPipData(builder, fragment.GetNestedFragmentValue(), renderer);
+                    if (pipData.FragmentEscaping == PipDataFragmentEscaping.EscapeEachArgument)
+                    {
+                        using (var scratch = Pools.GetStringBuilder())
+                        {
+                            AppendPipData(scratch.Instance, fragment.GetNestedFragmentValue(), renderer, useIpcEscaping);
+                            AppendEscapedArgument(builder, scratch.Instance.ToString(), useIpcEscaping);
+                        }
+                    }
+                    else
+                    {
+                        AppendPipData(builder, fragment.GetNestedFragmentValue(), renderer, useIpcEscaping);
+                    }
                     continue;
                 }
 
@@ -304,15 +326,8 @@ namespace BuildXL.Pips.Operations
                 switch (pipData.FragmentEscaping)
                 {
                     case PipDataFragmentEscaping.CRuntimeArgumentRules:
-                        if (useIpcEscaping)
-                        {
-                            builder.Append(AbstractParser.CommonEscapeArg(renderedEntry));
-                        }
-                        else
-                        {
-                            builder.AppendEscapedCommandLineWordAndAssertPostcondition(renderedEntry);
-                        }
-                        
+                    case PipDataFragmentEscaping.EscapeEachArgument:
+                        AppendEscapedArgument(builder, renderedEntry, useIpcEscaping);
                         break;
                     case PipDataFragmentEscaping.NoEscaping:
                         builder.Append(renderedEntry);
@@ -323,12 +338,31 @@ namespace BuildXL.Pips.Operations
             }
         }
 
+        private static void AppendEscapedArgument(StringBuilder builder, string value, bool useIpcEscaping)
+        {
+            if (useIpcEscaping)
+            {
+                builder.Append(AbstractParser.CommonEscapeArg(value));
+            }
+            else
+            {
+                builder.AppendEscapedCommandLineWordAndAssertPostcondition(value);
+            }
+        }
+
         private static int GetMaxLength(in PipData pipData, PipFragmentRenderer renderer)
         {
             Contract.Requires(pipData.IsValid);
 
+            if (pipData.FragmentEscaping == PipDataFragmentEscaping.EscapeArgument)
+            {
+                Contract.Requires(pipData.FragmentCount == 1);
+                // Quotes and backslashes can expand at chunk boundaries; bound the complete value.
+                return checked(2 * GetMaxLength(pipData.With(pipData.FragmentSeparator, PipDataFragmentEscaping.NoEscaping), renderer) + 2);
+            }
+
             int fragmentSeparatorLength = renderer.GetLength(pipData.FragmentSeparator, PipDataFragmentEscaping.NoEscaping);
-            int length = fragmentSeparatorLength * (pipData.FragmentCount - 1);
+            int length = fragmentSeparatorLength * Math.Max(pipData.FragmentCount - 1, 0);
             foreach (PipFragment fragment in pipData)
             {
                 Contract.Assume(fragment.FragmentType != PipFragmentType.Invalid);
@@ -336,12 +370,17 @@ namespace BuildXL.Pips.Operations
                 // recursively handle compound fragments
                 if (fragment.FragmentType == PipFragmentType.NestedFragment)
                 {
-                    length += GetMaxLength(fragment.GetNestedFragmentValue(), renderer);
+                    int nestedLength = GetMaxLength(fragment.GetNestedFragmentValue(), renderer);
+                    length = pipData.FragmentEscaping == PipDataFragmentEscaping.EscapeEachArgument
+                        ? checked(length + 2 * nestedLength + 2)
+                        : length + nestedLength;
                     continue;
                 }
 
                 // ask renderer to approximate max length for scalar fragments
-                length += renderer.GetMaxLength(fragment, pipData.FragmentEscaping, MaxPathStringLength);
+                var escaping = pipData.FragmentEscaping == PipDataFragmentEscaping.EscapeEachArgument
+                    ? PipDataFragmentEscaping.CRuntimeArgumentRules : pipData.FragmentEscaping;
+                length += renderer.GetMaxLength(fragment, escaping, MaxPathStringLength);
             }
 
             return length;

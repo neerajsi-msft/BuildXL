@@ -82,27 +82,28 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         [Fact]
         public void TextComposedArgumentsAndContentReachPipsWithoutFlattening()
         {
-            const string text = """
-                directgraph 2
-                path 0 "tool"
-                path 1 "."
-                path 2 "result"
-                string 0 "-c"
-                string 1 "echo "
-                string 2 "\"a b\""
-                string 3 ""
-                string 4 " \t\r\n"
-                writeFile tool
-                  destination $p0
-                  content $s1 $s2 $s4 $s3
-                process composed
-                  executable $p0
-                  workingDirectory $p1
-                  argument $s0
-                  argument $s1 $s2
-                  argument $s3
-                  output $p2
-                """;
+            const string text = "directgraph 3\n" +
+                "path 0 tool\n" +
+                "path 1 .\n" +
+                "path 2 result\n" +
+                "string 0 -c\n" +
+                "string 1 echo \n" +
+                "string 2 \"a b\"\n" +
+                "string 3 \n" +
+                "string 4  \t\r\n" +
+                "\t\n" +
+                "string 5  \n" +
+                "writeFile tool\n" +
+                "\tdestination p0\n" +
+                "\tcontent concat - s1 s2 s4 s3\n" +
+                "process composed\n" +
+                "\texecutable p0\n" +
+                "\tworkingDirectory p1\n" +
+                "\targuments concat s5 escapeArguments :\n" +
+                "\t\ts0\n" +
+                "\t\tconcat - s1 s2\n" +
+                "\t\ts3\n" +
+                "\toutput p2\n";
             var project = new global::BuildXL.Utilities.Configuration.Mutable.DirectGraphProjectSettings
             {
                 Name = PathAtom.Create(m_context.StringTable, TestModule),
@@ -121,10 +122,11 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Equal(expected.ToString(m_context.PathTable), actual.ToString(m_context.PathTable));
             var groups = Assert.Single(actual).GetNestedFragmentValue();
             Assert.Equal(3, groups.FragmentCount);
+            Assert.Equal(PipDataFragmentEscaping.EscapeEachArgument, groups.FragmentEscaping);
             Assert.True(groups.Skip(1).First().GetNestedFragmentValue().FragmentCount > 1);
             var content = Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<WriteFile>()).Contents;
             Assert.Equal("echo \"a b\" \t\r\n", content.ToString(m_context.PathTable));
-            Assert.True(content.FragmentCount > 1);
+            Assert.True(Assert.Single(content).GetNestedFragmentValue().FragmentCount > 1);
         }
 
         [Fact]
@@ -145,7 +147,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Fact]
-        public void TextAndWireProcessesHaveIdenticalNativeDataAndFingerprints()
+        public void TextAndWireProcessesHaveEquivalentRenderedDataAndFingerprints()
         {
             var request = NewProcess("equivalent", "out.txt");
             request.Arguments.Add(new[] { Text("-c"), Text("echo \"a b\""), Text("") });
@@ -169,35 +171,37 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 new DirectGraphTextLoader.SharedState(m_context.PathTable, new[] { settings }));
             loader.LoadProjectAsync(settings,
                 new Dictionary<DirectGraphProject, global::BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver.ProjectGraphOutputs>(),
-                _ => new StringReader("""
-                    directgraph 2
-                    path 0 "tool.exe"
-                    path 1 "."
-                    path 2 "out.txt"
-                    path 3 "in.txt"
-                    string 0 "-c"
-                    string 1 "echo \"a b\""
-                    string 2 ""
-                    string 3 "TRACKED"
-                    string 4 "value"
-                    string 5 "PASSTHROUGH"
-                    string 6 "resource"
+                _ => new StringReader($$"""
+                    directgraph 3
+                    path 0 tool.exe
+                    path 1 .
+                    path 2 out.txt
+                    path 3 in.txt
+                    string 0 -c
+                    string 1 echo "a b"
+                    string 2{{" "}}
+                    string 3 TRACKED
+                    string 4 value
+                    string 5 PASSTHROUGH
+                    string 6 resource
+                    string 7{{"  "}}
                     process equivalent
-                      executable $p0
-                      workingDirectory $p1
-                      argument $s0
-                      argument $s1
-                      argument $s2
-                      input $p3
-                      environment $s3 $s4
-                      passthroughEnvironment $s5
-                      semaphore $s6 2 1
-                      enableTempDirectory true
-                      option keepOutputsWritable
-                      output $p2
+                    {{"\t"}}executable p0
+                    {{"\t"}}workingDirectory p1
+                    {{"\t"}}arguments concat s7 escapeArguments :
+                    {{"\t\t"}}s0
+                    {{"\t\t"}}s1
+                    {{"\t\t"}}s2
+                    {{"\t"}}input p3
+                    {{"\t"}}environment s3 s4
+                    {{"\t"}}passthroughEnvironment s5
+                    {{"\t"}}semaphore s6 2 1
+                    {{"\t"}}enableTempDirectory true
+                    {{"\t"}}option keepOutputsWritable
+                    {{"\t"}}output p2
+
                     """), _ => true, CancellationToken.None).GetAwaiter().GetResult();
             var text = Assert.Single(graph.RetrieveScheduledPips().OfType<Process>());
-            Assert.Equal(wire.Arguments, text.Arguments);
             Assert.Equal(wire.Arguments.ToString(m_context.PathTable), text.Arguments.ToString(m_context.PathTable));
             Assert.Equal(wire.EnvironmentVariables.ToArray(), text.EnvironmentVariables.ToArray());
             Assert.Equal(wire.Dependencies.ToArray(), text.Dependencies.ToArray());

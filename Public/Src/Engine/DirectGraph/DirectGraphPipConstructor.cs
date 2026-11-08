@@ -134,7 +134,13 @@ namespace BuildXL.Engine.DirectGraph
             builder.AddInputFile(request.Executable);
             builder.ToolDescription = request.ToolDescription.IsValid ? request.ToolDescription : StringId.Create(m_paths.StringTable, "DirectGraph process");
             string description = Text(request.Description);
-            if (!string.IsNullOrEmpty(description))
+            if (request.Usage.IsValid)
+            {
+                if (request.Description.IsValid)
+                    throw new DirectGraphInvalidRequestException("Process usage cannot specify both PipData and a literal description.");
+                builder.Usage = request.Usage;
+            }
+            else if (!string.IsNullOrEmpty(description))
             {
                 builder.Usage = PipDataBuilder.CreatePipData(m_paths.StringTable, string.Empty, PipDataFragmentEscaping.NoEscaping, description);
             }
@@ -206,9 +212,15 @@ namespace BuildXL.Engine.DirectGraph
             foreach (var variable in request.EnvironmentVariables)
             {
                 RequireString(variable.Name, "environment_variables.name");
+                if (variable.Data.IsValid && (variable.Value.IsValid || variable.IsPassThrough))
+                    throw new DirectGraphInvalidRequestException("An environment value cannot specify both PipData and a literal or passthrough value.");
                 if (variable.IsPassThrough)
                 {
                     builder.SetPassthroughEnvironmentVariable(variable.Name);
+                }
+                else if (variable.Data.IsValid)
+                {
+                    builder.SetEnvironmentVariable(variable.Name, variable.Data, isPassThrough: false);
                 }
                 else
                 {

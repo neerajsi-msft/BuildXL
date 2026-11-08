@@ -59,20 +59,21 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     });
                     """)
                 .AddFile("graph.dg", $$"""
-                    directgraph 2
-                    path 0 {{JsonSerializer.Serialize(OperatingSystemHelper.IsWindowsOS ? CmdHelper.CmdX64 : CmdHelper.Bash)}}
-                    path 1 "."
-                    path 2 "out"
-                    path 3 "out/source"
-                    path 4 "{{output}}"
+                    directgraph 3
+                    path 0 {{(OperatingSystemHelper.IsWindowsOS ? CmdHelper.CmdX64 : CmdHelper.Bash)}}
+                    path 1 .
+                    path 2 out
+                    path 3 out/source
+                    path 4 {{output}}
                     process produce
-                      executable $p0
-                      workingDirectory $p1
-                      outputDirectory $p2 shared
-                      output $p4
+                    {{"\t"}}executable p0
+                    {{"\t"}}workingDirectory p1
+                    {{"\t"}}outputDirectory p2 shared
+                    {{"\t"}}output p4
                     sealDirectory source
-                      directoryRoot $p3
-                      sealKind sourceAllDirectories
+                    {{"\t"}}directoryRoot p3
+                    {{"\t"}}sealKind sourceAllDirectories
+
                     """)
                 .AddFile("out/source/input.txt", "source")
                 .PersistSpecsAndGetConfiguration();
@@ -148,39 +149,42 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         public void ParallelProjectConstructionPreservesNativeFingerprintsAndPaths()
         {
             string producer(string name, bool automaticTemp) => $$"""
-                directgraph 2
-                path 0 "/bin/bash"
-                path 1 "."
-                path 2 "out/{{name}}.in"
-                path 3 "out/shared/{{name}}.txt"
-                path 4 "out/shared"
-                path 5 "out/{{name}}-temp"
-                path 6 "out/base.txt"
-                path 7 "out"
-                string 0 "{{name}}"
-                string 1 "-c"
-                string 2 "mkdir -p out/shared && cat out/{{name}}.in > out/shared/{{name}}.txt"
+                directgraph 3
+                path 0 /bin/bash
+                path 1 .
+                path 2 out/{{name}}.in
+                path 3 out/shared/{{name}}.txt
+                path 4 out/shared
+                path 5 out/{{name}}-temp
+                path 6 out/base.txt
+                path 7 out
+                string 0 {{name}}
+                string 1 -c
+                string 2 mkdir -p out/shared && cat out/{{name}}.in > out/shared/{{name}}.txt
+                string 3{{"  "}}
                 writeFile prepare
-                  destination $p2
-                  content $s0
+                {{"\t"}}destination p2
+                {{"\t"}}content s0
                 process work
-                  executable $p0
-                  workingDirectory $p1
-                  input $p2
-                  input $p6
-                  inputDirectory $p7 base/baseSeal
-                  argument $s1
-                  argument $s2
-                  option dependsOnCurrentOs
-                  output $p3
-                  outputDirectory $p4 shared
-                  {{(automaticTemp ? "enableTempDirectory true" : "tempDirectory $p5")}}
+                {{"\t"}}executable p0
+                {{"\t"}}workingDirectory p1
+                {{"\t"}}input p2
+                {{"\t"}}input p6
+                {{"\t"}}inputDirectory p7 base/baseSeal
+                {{"\t"}}arguments concat s3 escapeArguments :
+                {{"\t\t"}}s1
+                {{"\t\t"}}s2
+                {{"\t"}}option dependsOnCurrentOs
+                {{"\t"}}output p3
+                {{"\t"}}outputDirectory p4 shared
+                {{"\t"}}{{(automaticTemp ? "enableTempDirectory true" : "tempDirectory p5")}}
                 export publish
-                  file $p3
-                  directory $p4 work
+                {{"\t"}}file p3
+                {{"\t"}}directory p4 work
                 export again
-                  file $p3
-                  directory $p4 work
+                {{"\t"}}file p3
+                {{"\t"}}directory p4 work
+
                 """;
             var config = Build()
                 .Configuration("""
@@ -204,90 +208,100 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                         mounts: [{ name: a`out`, path: p`out`, isWritable: true, isReadable: true, trackSourceFileChanges: true }],
                     });
                     """)
-                .AddFile("base.dg", """
-                    directgraph 2
-                    path 0 "out/base.txt"
-                    path 1 "out"
-                    string 0 "base"
+                .AddFile("base.dg", $$"""
+                    directgraph 3
+                    path 0 out/base.txt
+                    path 1 out
+                    string 0 base
                     writeFile prepare
-                      destination $p0
-                      content $s0
+                    {{"\t"}}destination p0
+                    {{"\t"}}content s0
                     sealDirectory baseSeal
-                      directoryRoot $p1
-                      content $p0
+                    {{"\t"}}directoryRoot p1
+                    {{"\t"}}content p0
                     export publish
-                      file $p0
-                      directory $p1
+                    {{"\t"}}file p0
+                    {{"\t"}}directory p1
+
                     """)
                 .AddFile("left.dg", producer("left", automaticTemp: true))
                 .AddFile("right.dg", producer("right", automaticTemp: false))
-                .AddFile("independent.dg", """
-                    directgraph 2
-                    path 0 "/bin/bash"
-                    path 1 "."
-                    path 2 "out/independent.txt"
-                    string 0 "-c"
-                    string 1 "printf independent > out/independent.txt"
+                .AddFile("independent.dg", $$"""
+                    directgraph 3
+                    path 0 /bin/bash
+                    path 1 .
+                    path 2 out/independent.txt
+                    string 0 -c
+                    string 1 printf independent > out/independent.txt
+                    string 2{{"  "}}
                     process work
-                      executable $p0
-                      workingDirectory $p1
-                      argument $s0
-                      argument $s1
-                      option dependsOnCurrentOs
-                      enableTempDirectory true
-                      output $p2
+                    {{"\t"}}executable p0
+                    {{"\t"}}workingDirectory p1
+                    {{"\t"}}arguments concat s2 escapeArguments :
+                    {{"\t\t"}}s0
+                    {{"\t\t"}}s1
+                    {{"\t"}}option dependsOnCurrentOs
+                    {{"\t"}}enableTempDirectory true
+                    {{"\t"}}output p2
+
                     """)
-                .AddFile("join.dg", """
-                    directgraph 2
-                    path 0 "out/shared"
-                    path 1 "out/shared/left.txt"
-                    path 2 "out/shared/right.txt"
-                    path 3 "/bin/bash"
-                    path 4 "."
-                    path 5 "out/join.txt"
-                    string 0 "-c"
-                    string 1 "cat out/shared/left.txt out/shared/right.txt > out/join.txt"
+                .AddFile("join.dg", $$"""
+                    directgraph 3
+                    path 0 out/shared
+                    path 1 out/shared/left.txt
+                    path 2 out/shared/right.txt
+                    path 3 /bin/bash
+                    path 4 .
+                    path 5 out/join.txt
+                    string 0 -c
+                    string 1 cat out/shared/left.txt out/shared/right.txt > out/join.txt
                     composeSharedOpaque combined
-                      directoryRoot $p0
-                      directory $p0 left/work
-                      directory $p0 right/work
+                    {{"\t"}}directoryRoot p0
+                    {{"\t"}}directory p0 left/work
+                    {{"\t"}}directory p0 right/work
+                    string 2{{"  "}}
                     process work
-                      executable $p3
-                      workingDirectory $p4
-                      input $p1
-                      input $p2
-                      inputDirectory $p0 combined
-                      argument $s0
-                      argument $s1
-                      option dependsOnCurrentOs
-                      enableTempDirectory true
-                      output $p5
+                    {{"\t"}}executable p3
+                    {{"\t"}}workingDirectory p4
+                    {{"\t"}}input p1
+                    {{"\t"}}input p2
+                    {{"\t"}}inputDirectory p0 combined
+                    {{"\t"}}arguments concat s2 escapeArguments :
+                    {{"\t\t"}}s0
+                    {{"\t\t"}}s1
+                    {{"\t"}}option dependsOnCurrentOs
+                    {{"\t"}}enableTempDirectory true
+                    {{"\t"}}output p5
                     export publish
-                      file $p5
-                      directory $p0 combined
+                    {{"\t"}}file p5
+                    {{"\t"}}directory p0 combined
                     export again
-                      file $p5
-                      directory $p0 combined
+                    {{"\t"}}file p5
+                    {{"\t"}}directory p0 combined
+
                     """)
-                .AddFile("top.dg", """
-                    directgraph 2
-                    path 0 "/bin/bash"
-                    path 1 "."
-                    path 2 "out/join.txt"
-                    path 3 "out/top.txt"
-                    path 4 "out/shared"
-                    string 0 "-c"
-                    string 1 "cat out/join.txt > out/top.txt"
+                .AddFile("top.dg", $$"""
+                    directgraph 3
+                    path 0 /bin/bash
+                    path 1 .
+                    path 2 out/join.txt
+                    path 3 out/top.txt
+                    path 4 out/shared
+                    string 0 -c
+                    string 1 cat out/join.txt > out/top.txt
+                    string 2{{"  "}}
                     process work
-                      executable $p0
-                      workingDirectory $p1
-                      input $p2
-                      inputDirectory $p4 join/combined
-                      argument $s0
-                      argument $s1
-                      option dependsOnCurrentOs
-                      enableTempDirectory true
-                      output $p3
+                    {{"\t"}}executable p0
+                    {{"\t"}}workingDirectory p1
+                    {{"\t"}}input p2
+                    {{"\t"}}inputDirectory p4 join/combined
+                    {{"\t"}}arguments concat s2 escapeArguments :
+                    {{"\t\t"}}s0
+                    {{"\t\t"}}s1
+                    {{"\t"}}option dependsOnCurrentOs
+                    {{"\t"}}enableTempDirectory true
+                    {{"\t"}}output p3
+
                     """)
                 .PersistSpecsAndGetConfiguration();
             var mutable = (CommandLineConfiguration)config;
@@ -350,8 +364,10 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             string[] rewrite = OperatingSystemHelper.IsWindowsOS
                 ? new[] { CmdHelper.CmdX64, "/d", "/c", @"echo world>> out\a\a.txt" }
                 : new[] { CmdHelper.Bash, "-c", "echo world >> out/a/a.txt" };
-            string strings = string.Join("\n", rewrite.Skip(1).Select((argument, index) => $"string {index + 1} " + JsonSerializer.Serialize(argument)));
-            string arguments = string.Join("\n", rewrite.Skip(1).Select((argument, index) => $"  argument $s{index + 1}"));
+            string strings = string.Join("\n", rewrite.Skip(1).Select((argument, index) =>
+                $"string {index + 1} " + argument.Replace("\n", "\n\t"))) + $"\nstring {rewrite.Length}  ";
+            string arguments = $"\targuments concat s{rewrite.Length} escapeArguments :\n" +
+                string.Join("\n", rewrite.Skip(1).Select((_, index) => $"\t\ts{index + 1}"));
             var config = Build()
                 .Configuration($$"""
                     config({
@@ -374,45 +390,50 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     });
                     """)
                 .AddFile("tools.dg", $$"""
-                    directgraph 2
-                    path 0 {{JsonSerializer.Serialize(Path.GetDirectoryName(rewrite[0]))}}
+                    directgraph 3
+                    path 0 {{Path.GetDirectoryName(rewrite[0])}}
                     sealDirectory host
-                      directoryRoot $p0
-                      sealKind sourceTopDirectoryOnly
+                    {{"\t"}}directoryRoot p0
+                    {{"\t"}}sealKind sourceTopDirectoryOnly
+
                     """)
                 .AddFile("a.dg", $$"""
-                    directgraph 2
-                    path 0 "out/a/a.txt"
-                    path 1 {{JsonSerializer.Serialize(rewrite[0])}}
-                    path 2 "."
-                    string 0 "hello\n"
+                    directgraph 3
+                    path 0 out/a/a.txt
+                    path 1 {{rewrite[0]}}
+                    path 2 .
+                    string 0 hello
+                    {{"\t"}}
                     {{strings}}
                     writeFile write
-                      destination $p0
-                      content $s0
+                    {{"\t"}}destination p0
+                    {{"\t"}}content s0
                     process rewrite
-                      executable $p1
-                      workingDirectory $p2
+                    {{"\t"}}executable p1
+                    {{"\t"}}workingDirectory p2
                     {{arguments}}
-                      option dependsOnCurrentOs
-                      rewrite $p0
+                    {{"\t"}}option dependsOnCurrentOs
+                    {{"\t"}}rewrite p0
+
                     """)
-                .AddFile("a.policy.dg", """
-                    directgraph 2
-                    path 0 "out/a"
-                    path 1 "out/a/a.txt"
+                .AddFile("a.policy.dg", $$"""
+                    directgraph 3
+                    path 0 out/a
+                    path 1 out/a/a.txt
                     sealDirectory publicHeaders
-                      directoryRoot $p0
-                      sealKind partial
-                      content $p1
+                    {{"\t"}}directoryRoot p0
+                    {{"\t"}}sealKind partial
+                    {{"\t"}}content p1
+
                     """)
-                .AddFile("b.dg", """
-                    directgraph 2
-                    path 0 "out/a/a.txt"
-                    path 1 "out/b.txt"
+                .AddFile("b.dg", $$"""
+                    directgraph 3
+                    path 0 out/a/a.txt
+                    path 1 out/b.txt
                     copyFile write
-                      source $p0
-                      destination $p1
+                    {{"\t"}}source p0
+                    {{"\t"}}destination p1
+
                     """)
                 .AddSpec("consumer.dsc", """
                     import { files } from "b";
@@ -726,9 +747,10 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             bool windows = OperatingSystemHelper.IsWindowsOS;
             string executable = windows ? CmdHelper.CmdX64 : CmdHelper.Bash;
             string[] flags = windows ? new[] { "/d", "/c" } : new[] { "-c" };
-            string registrations = string.Join("\n", flags.Select((flag, index) => $"string {index} {JsonSerializer.Serialize(flag)}"));
-            string arguments(int commandId) => string.Join("\n", flags.Select((_, index) => $"  argument $s{index}")) +
-                $"\n  argument $s{commandId}";
+            string registrations = "string 0  \n" + string.Join("\n", flags.Select((flag, index) =>
+                $"string {index + 1} " + flag.Replace("\n", "\n\t")));
+            string arguments(int commandId) => "\targuments concat s0 escapeArguments :\n" +
+                string.Join("\n", flags.Select((_, index) => $"\t\ts{index + 1}")) + $"\n\t\ts{commandId}";
             string first = windows
                 ? @"if not exist out\opaque mkdir out\opaque & echo first> out\opaque\a.txt"
                 : "mkdir -p out/opaque && printf first > out/opaque/a.txt";
@@ -738,15 +760,16 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             string read = windows ? @"type out\opaque\a.txt > out\result.txt" : "cat out/opaque/a.txt > out/result.txt";
             string composition = directoryKind == "composite" ? $$"""
                 process second
-                  executable $p0
-                  workingDirectory $p1
-                {{arguments(flags.Length + 1)}}
-                  option dependsOnCurrentOs
-                  outputDirectory $p2 shared
+                {{"\t"}}executable p0
+                {{"\t"}}workingDirectory p1
+                {{arguments(flags.Length + 2)}}
+                {{"\t"}}option dependsOnCurrentOs
+                {{"\t"}}outputDirectory p2 shared
                 composeSharedOpaque combined
-                  directoryRoot $p2
-                  directory $p2 first
-                  directory $p2 second
+                {{"\t"}}directoryRoot p2
+                {{"\t"}}directory p2 first
+                {{"\t"}}directory p2 second
+
                 """ : "";
 
             var config = Build()
@@ -765,45 +788,47 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     });
                     """)
                 .AddFile("tools.dg", $$"""
-                    directgraph 2
-                    path 0 {{JsonSerializer.Serialize(Path.GetDirectoryName(executable))}}
+                    directgraph 3
+                    path 0 {{Path.GetDirectoryName(executable)}}
                     sealDirectory host
-                      directoryRoot $p0
-                      sealKind sourceTopDirectoryOnly
+                    {{"\t"}}directoryRoot p0
+                    {{"\t"}}sealKind sourceTopDirectoryOnly
+
                     """)
                 .AddFile("producer.dg", $$"""
-                    directgraph 2
-                    path 0 {{JsonSerializer.Serialize(executable)}}
-                    path 1 "."
-                    path 2 "out/opaque"
+                    directgraph 3
+                    path 0 {{executable}}
+                    path 1 .
+                    path 2 out/opaque
                     {{registrations}}
-                    string {{flags.Length}} {{JsonSerializer.Serialize(first)}}
-                    string {{flags.Length + 1}} {{JsonSerializer.Serialize(second)}}
+                    string {{flags.Length + 1}} {{first}}
+                    string {{flags.Length + 2}} {{second}}
                     process first
-                      executable $p0
-                      workingDirectory $p1
-                    {{arguments(flags.Length)}}
-                      option dependsOnCurrentOs
-                      outputDirectory $p2 {{(directoryKind == "exclusive" ? "exclusive" : "shared")}}
-                    {{composition}}
-                    export public
-                      directory $p2 {{(directoryKind == "composite" ? "combined" : "first")}}
+                    {{"\t"}}executable p0
+                    {{"\t"}}workingDirectory p1
+                    {{arguments(flags.Length + 1)}}
+                    {{"\t"}}option dependsOnCurrentOs
+                    {{"\t"}}outputDirectory p2 {{(directoryKind == "exclusive" ? "exclusive" : "shared")}}
+                    {{composition}}export public
+                    {{"\t"}}directory p2 {{(directoryKind == "composite" ? "combined" : "first")}}
+
                     """)
                 .AddFile("consumer.dg", $$"""
-                    directgraph 2
-                    path 0 {{JsonSerializer.Serialize(executable)}}
-                    path 1 "."
-                    path 2 "out/opaque/a.txt"
-                    path 3 "out/result.txt"
+                    directgraph 3
+                    path 0 {{executable}}
+                    path 1 .
+                    path 2 out/opaque/a.txt
+                    path 3 out/result.txt
                     {{registrations}}
-                    string {{flags.Length}} {{JsonSerializer.Serialize(read)}}
+                    string {{flags.Length + 1}} {{read}}
                     process consume
-                      executable $p0
-                      workingDirectory $p1
-                    {{arguments(flags.Length)}}
-                      option dependsOnCurrentOs
-                      input $p2
-                      output $p3
+                    {{"\t"}}executable p0
+                    {{"\t"}}workingDirectory p1
+                    {{arguments(flags.Length + 1)}}
+                    {{"\t"}}option dependsOnCurrentOs
+                    {{"\t"}}input p2
+                    {{"\t"}}output p3
+
                     """)
                 .PersistSpecsAndGetConfiguration();
             var mutable = (CommandLineConfiguration)config;

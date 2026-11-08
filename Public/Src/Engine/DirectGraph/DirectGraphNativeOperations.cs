@@ -29,6 +29,7 @@ namespace BuildXL.Engine.DirectGraph
         public FileArtifact Executable { get; set; }
         public AbsolutePath WorkingDirectory { get; set; }
         public PipData Arguments { get; set; }
+        public PipData Usage { get; set; }
         public StringId ToolDescription { get; set; }
         public Process.Options Options { get; set; } = Process.Options.RequireGlobalDependencies;
         public RewritePolicy? DoubleWritePolicy { get; set; }
@@ -73,7 +74,7 @@ namespace BuildXL.Engine.DirectGraph
         AbsolutePath Path, FileExistence Existence = FileExistence.Required, FileArtifact Rewrites = default);
     public readonly record struct DirectGraphDirectoryOutput(AbsolutePath Path, NativeSealKind Kind);
     public readonly record struct DirectGraphOrderDependency(FileArtifact File, PipId Producer);
-    public readonly record struct DirectGraphEnvironmentVariable(StringId Name, StringId Value = default, bool IsPassThrough = false);
+    public readonly record struct DirectGraphEnvironmentVariable(StringId Name, StringId Value = default, bool IsPassThrough = false, PipData Data = default);
     public readonly record struct DirectGraphSemaphore(StringId Name, int Limit, int IncrementBy);
     public readonly record struct DirectGraphBreakawayChildProcess(StringId ProcessName, string RequiredArguments, bool RequiredArgumentsIgnoreCase);
 

@@ -4,8 +4,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using BuildXL.Pips.Operations;
+using BuildXL.Utilities.CLI;
 using BuildXL.Utilities.Core;
 using Test.BuildXL.TestUtilities.Xunit;
 using Xunit;
@@ -109,6 +111,112 @@ namespace Test.BuildXL.Pips
         {
             var pipData = m_pipDataBuilder.ToPipData(EnclosingSeparator, EnclosingEscaping);
             VerifyFullPipData(pipData);
+        }
+
+        [Theory]
+        [InlineData("C:\\", "dir with spaces")]
+        [InlineData("a\\", "\"quoted\"\\")]
+        [InlineData("", "")]
+        [InlineData("a\t", "b\nc")]
+        public void EscapeArgumentAfterConcatenation(string first, string second)
+        {
+            var raw = new PipDataBuilder(m_pathTable.StringTable);
+            raw.Add(first);
+            raw.Add(second);
+            var arguments = new PipDataBuilder(m_pathTable.StringTable);
+            arguments.AddEscapedArgument(raw.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping));
+            var data = arguments.ToPipData(" ", PipDataFragmentEscaping.NoEscaping);
+            Assert.Equal(CommandLineEscaping.EscapeAsCommandLineWord(first + second), data.ToString(m_pathTable));
+            Assert.Equal(AbstractParser.CommonEscapeArg(first + second),
+                data.ToString(new PipFragmentRenderer(m_pathTable), useIpcEscaping: true));
+            Assert.True(data.GetMaxPossibleLength(m_pathTable.StringTable) >= data.ToString(m_pathTable).Length);
+
+            var bytes = new byte[data.Entries.Count * PipDataEntry.BinarySize];
+            int index = 0;
+            foreach (var entry in data.Entries) entry.Write(bytes, ref index);
+            index = 0;
+            var entries = new List<PipDataEntry>();
+            while (index < bytes.Length) entries.Add(PipDataEntry.Read(bytes, ref index));
+            var roundtrip = PipData.CreateInternal(data.HeaderEntry, PipDataEntryList.FromEntries(entries), StringId.Invalid);
+            Assert.Equal<PipDataEntry>(data.Entries, roundtrip.Entries);
+            Assert.Equal(data.ToString(m_pathTable), roundtrip.ToString(m_pathTable));
+        }
+
+        [Fact]
+        public void EscapeArgumentDefersPathExpansion()
+        {
+            var raw = new PipDataBuilder(m_pathTable.StringTable);
+            raw.Add("-I");
+            raw.Add(m_uniqueEntry0);
+            var arguments = new PipDataBuilder(m_pathTable.StringTable);
+            arguments.AddEscapedArgument(raw.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping));
+            var data = arguments.ToPipData(" ", PipDataFragmentEscaping.NoEscaping);
+            Assert.Equal(CommandLineEscaping.EscapeAsCommandLineWord("-Iroot with spaces"),
+                data.ToString(_ => "root with spaces", m_pathTable.StringTable));
+            Assert.Equal("-Iother", data.ToString(_ => "other", m_pathTable.StringTable));
+        }
+
+        [Theory]
+        [InlineData("C:\\", "dir with spaces")]
+        [InlineData("a\\", "\"quoted\"\\")]
+        [InlineData("", "")]
+        [InlineData("a\t", "b\nc")]
+        public void ConcatEscapesEachCompleteChild(string first, string second)
+        {
+            var raw = new PipDataBuilder(m_pathTable.StringTable);
+            raw.Add(first);
+            raw.Add(second);
+            var nested = new PipDataBuilder(m_pathTable.StringTable);
+            nested.Add(raw.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping));
+            var arguments = new PipDataBuilder(m_pathTable.StringTable);
+            arguments.Add(nested.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping));
+            arguments.Add("");
+            arguments.Add("tail with spaces");
+            var data = arguments.ToPipData(" ", PipDataFragmentEscaping.EscapeEachArgument);
+            string[] values = { first + second, "", "tail with spaces" };
+            Assert.Equal(string.Join(" ", values.Select(value => CommandLineEscaping.EscapeAsCommandLineWord(value))), data.ToString(m_pathTable));
+            Assert.Equal(string.Join(" ", values.Select(AbstractParser.CommonEscapeArg)),
+                data.ToString(new PipFragmentRenderer(m_pathTable), useIpcEscaping: true));
+            Assert.True(data.GetMaxPossibleLength(m_pathTable.StringTable) >= data.ToString(m_pathTable).Length);
+
+            var bytes = new byte[(data.Entries.Count + 1) * PipDataEntry.BinarySize];
+            int index = 0;
+            data.HeaderEntry.Write(bytes, ref index);
+            foreach (var entry in data.Entries) entry.Write(bytes, ref index);
+            index = 0;
+            var header = PipDataEntry.Read(bytes, ref index);
+            var entries = new List<PipDataEntry>();
+            while (index < bytes.Length) entries.Add(PipDataEntry.Read(bytes, ref index));
+            var roundtrip = PipData.CreateInternal(header, PipDataEntryList.FromEntries(entries), StringId.Invalid);
+            Assert.Equal(data.HeaderEntry, roundtrip.HeaderEntry);
+            Assert.Equal<PipDataEntry>(data.Entries, roundtrip.Entries);
+            Assert.Equal(data.ToString(m_pathTable), roundtrip.ToString(m_pathTable));
+        }
+
+        [Fact]
+        public void ConcatArgumentEscapingDefersPathsAndPreservesChildRules()
+        {
+            var raw = new PipDataBuilder(m_pathTable.StringTable);
+            raw.Add("-I");
+            raw.Add(m_uniqueEntry0);
+            var arguments = new PipDataBuilder(m_pathTable.StringTable);
+            arguments.Add(raw.ToPipData(string.Empty, PipDataFragmentEscaping.NoEscaping));
+            raw.Clear();
+            raw.Add("already quoted");
+            arguments.Add(raw.ToPipData(string.Empty, PipDataFragmentEscaping.CRuntimeArgumentRules));
+            var data = arguments.ToPipData(" | ", PipDataFragmentEscaping.EscapeEachArgument);
+            string quotedChild = CommandLineEscaping.EscapeAsCommandLineWord("already quoted");
+            Assert.Equal(CommandLineEscaping.EscapeAsCommandLineWord("-Iroot with spaces") + " | " +
+                CommandLineEscaping.EscapeAsCommandLineWord(quotedChild),
+                data.ToString(_ => "root with spaces", m_pathTable.StringTable));
+            string ipcChild = AbstractParser.CommonEscapeArg("already quoted");
+            Assert.Equal(AbstractParser.CommonEscapeArg("-I" + m_uniqueEntry0.ToString(m_pathTable)) + " | " +
+                AbstractParser.CommonEscapeArg(ipcChild),
+                data.ToString(new PipFragmentRenderer(m_pathTable), useIpcEscaping: true));
+            raw.Clear();
+            var empty = raw.ToPipData(" ", PipDataFragmentEscaping.EscapeEachArgument);
+            Assert.Equal("", empty.ToString(m_pathTable));
+            Assert.Equal(0, empty.GetMaxPossibleLength(m_pathTable.StringTable));
         }
 
         [Fact]

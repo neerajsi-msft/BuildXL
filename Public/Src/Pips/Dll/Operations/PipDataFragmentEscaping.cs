@@ -26,6 +26,18 @@ namespace BuildXL.Pips.Operations
         /// </remarks>
         CRuntimeArgumentRules,
 
+        /// <summary>
+        /// Renders a single child fragment, then encodes its complete value as one C-runtime argument.
+        /// Unlike CRuntimeArgumentRules, this applies after rendering nested data.
+        /// </summary>
+        EscapeArgument,
+
+        /// <summary>
+        /// Renders each child completely, escapes it as one argument, then joins the escaped values.
+        /// Nested children retain their own rendering rules before whole-child escaping.
+        /// </summary>
+        EscapeEachArgument,
+
         ///// <summary>
         ///// Encoded as argument for Cmd.exe.
         ///// </summary>

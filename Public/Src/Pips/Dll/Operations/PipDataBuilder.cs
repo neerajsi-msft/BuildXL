@@ -427,6 +427,16 @@ namespace BuildXL.Pips.Operations
             m_entries.AddRange(pipData.Entries);
         }
 
+        /// <summary>Encodes the rendered value as one argument, without escaping its pieces independently.</summary>
+        public void AddEscapedArgument(in PipData value)
+        {
+            Contract.Requires(value.IsValid);
+            using (StartFragment(PipDataFragmentEscaping.EscapeArgument, string.Empty))
+            {
+                Add(value);
+            }
+        }
+
         /// <summary>
         /// Starts a new nested pip data scope.
         /// </summary>

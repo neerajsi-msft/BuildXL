@@ -97,12 +97,8 @@ namespace GraphRenderer
                     for (int i = 0; i < field.Value.Count; i++)
                     {
                         var row = field.Value[i];
-                        string label = field.Key == "argument" || field.Value.Count > 1 ? $"{field.Key}[{i}]" : field.Key;
-                        if (field.Key == "argument" || (record.Kind == "writeFile" && field.Key == "content"))
-                        {
-                            WriteValue(output, label, string.Concat(row));
-                        }
-                        else if (row.Length == 1)
+                        string label = field.Value.Count > 1 ? $"{field.Key}[{i}]" : field.Key;
+                        if (row.Length == 1)
                         {
                             WriteValue(output, label, row[0]);
                         }
@@ -110,6 +106,16 @@ namespace GraphRenderer
                         {
                             output.WriteLine($"  {label}: {JsonSerializer.Serialize(row, s_jsonOptions)}");
                         }
+                    }
+                }
+                foreach (var field in record.PipDataFields)
+                {
+                    for (int i = 0; i < field.Value.Count; i++)
+                    {
+                        var row = field.Value[i];
+                        string label = field.Value.Count > 1 ? $"{field.Key}[{i}]" : field.Key;
+                        if (row.Parameters.Length > 0) output.WriteLine($"  {label} parameters: {JsonSerializer.Serialize(row.Parameters, s_jsonOptions)}");
+                        WriteExpression(output, label, row.Expression, 1);
                     }
                 }
                 count++;
@@ -125,7 +131,18 @@ namespace GraphRenderer
             {
                 throw new ArgumentException($"{option} requires one value and may occur only once.");
             }
+
             return args[++index];
+        }
+
+        private static void WriteExpression(TextWriter output, string label, DirectGraphTextExpression expression, int depth)
+        {
+            output.WriteLine($"{new string(' ', depth * 2)}{label}: {expression.Kind} {Quote(expression.Value)}" +
+                (expression.EscapeArguments ? " escapeArguments" : string.Empty));
+            for (int i = 0; i < expression.Children.Count; i++)
+            {
+                WriteExpression(output, $"child[{i}]", expression.Children[i], depth + 1);
+            }
         }
 
         private static bool MatchesOutput(DirectGraphTextRecord record, string path)
