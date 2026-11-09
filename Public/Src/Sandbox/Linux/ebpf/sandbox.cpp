@@ -13,6 +13,7 @@
 #include <string>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -1033,6 +1034,21 @@ int SetupMaps(struct sandbox_bpf *skel) {
         // Freeze the map so it can be safely accessed from the kernel side without locks.
         if (bpf_map_freeze(runner_pid_level_fd)) {
             LogError("Failed to freeze runner_pid_level map: %s\n", strerror(errno));
+            Cleanup(skel);
+            return -1;
+        }
+
+        int runner_pid_ns_inode_fd = bpf_object__find_map_fd_by_name(skel->obj, "runner_pid_ns_inode");
+        struct stat namespace_stat;
+        if (runner_pid_ns_inode_fd < 0 || stat("/proc/self/ns/pid", &namespace_stat) != 0) {
+            LogError("Failed to get runner PID namespace identity: %s\n", strerror(errno));
+            Cleanup(skel);
+            return -1;
+        }
+        __u64 namespace_inode = namespace_stat.st_ino;
+        if (bpf_map_update_elem(runner_pid_ns_inode_fd, &ZERO, &namespace_inode, BPF_ANY) ||
+            bpf_map_freeze(runner_pid_ns_inode_fd)) {
+            LogError("Failed to publish runner PID namespace identity: %s\n", strerror(errno));
             Cleanup(skel);
             return -1;
         }

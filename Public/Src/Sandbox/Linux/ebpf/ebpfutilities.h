@@ -258,6 +258,15 @@ struct {
     __uint(map_flags, BPF_F_RDONLY_PROG);
 } runner_pid_level SEC(".maps");
 
+/** Identity of the runner's PID namespace; levels alone do not identify a namespace. */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, __u64);
+    __uint(max_entries, 1);
+    __uint(map_flags, BPF_F_RDONLY_PROG);
+} runner_pid_ns_inode SEC(".maps");
+
 /**
  * Holds a temporary per-CPU untracked scope key, so we can construct one for doing lookups.
  */
@@ -1813,7 +1822,7 @@ __attribute__((always_inline)) static pid_t bpf_get_ns_pid(struct task_struct *t
         return 0;
     }
     
-    // Validate that the runner namespace level is a parent of the current task namespace level.
+    // A lower level cannot contain the runner. Namespace identity is checked below.
     if (*runner_ns_level > level) {
         // This means we are looking at a task that is not in the hierarchy of the runner. So we are sure we are not interested.
         return 0;
@@ -1821,7 +1830,7 @@ __attribute__((always_inline)) static pid_t bpf_get_ns_pid(struct task_struct *t
 
     // Kernel probes also see host tasks when the runner is in a container.
     // Only take the initial-namespace fast path after checking runner visibility.
-    if (level == 0) {
+    if (level == 0 && *runner_ns_level == 0) {
         return BPF_CORE_READ(task, tgid);
     }
 
@@ -1847,6 +1856,11 @@ __attribute__((always_inline)) static pid_t bpf_get_ns_pid(struct task_struct *t
         // This is not expected to happen, we should always be able to read the upid data of a namespace.
         // Try to report it to the ring buffer, even if we don't know the runner pid, just for added robustness.
         report_ring_buffer_error_unknown_runner("Failed to read upid data for task.");
+        return 0;
+    }
+
+    __u64* runner_ns_inode = bpf_map_lookup_elem(&runner_pid_ns_inode, &ZERO);
+    if (!runner_ns_inode || (__u64)BPF_CORE_READ(upid_data.ns, ns.inum) != *runner_ns_inode) {
         return 0;
     }
 
