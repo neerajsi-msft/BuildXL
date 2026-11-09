@@ -14,5 +14,6 @@ It does not rewrite payloads or expression structure.
 
 The corpus covers leading/trailing TABs, CR, embedded/trailing LF, one-space and
 empty values, dollars/quotes/backslashes, UTF-8 C1 controls, empty/space shell
-arguments, deferred recipe shells, a long inline concat, and graph-selected
-partial installation seals with a JSON membership write.
+arguments, deferred recipe shells, a long inline concat, grouped outputs, config
+`process` options/semaphores/automatic temp, and graph-selected partial
+installation seals with a JSON membership write.

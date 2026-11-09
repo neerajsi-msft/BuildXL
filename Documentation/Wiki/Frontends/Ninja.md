@@ -327,7 +327,8 @@ paths, not imports or producer operation IDs. A path resolves to an earlier
 local output or an artifact published by a direct dependency. Executables use
 the same resolution, including generated executables.
 
-A process has one optional `arguments` expression rooted at `concat`.
+A process has one optional `arguments` expression: a bare `sID`/`pID` reference
+or a `concat`.
 `concat sSEPARATOR escapeArguments` escapes each complete immediate child as
 one argument; raw nested concats compose strings and deferred paths without
 interpreting shell syntax. See the README for inline (`-`) and block (`:`)

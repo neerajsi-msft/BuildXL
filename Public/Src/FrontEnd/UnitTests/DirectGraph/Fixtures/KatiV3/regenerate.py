@@ -21,10 +21,9 @@ payloads = {
 }
 makefile = """SHELL := /bin/bash --noprofile '' ' '
 all: install/alpha install/beta output/long
-install/alpha: input
-\t@printf '%s' "$(shell printf 'left\\nright\\n')" > $@
-install/beta: input
-\t@printf '%s' 'literal $$ dollar' > $@
+install/alpha install/beta &: input
+\t@printf '%s' "$(shell printf 'left\\nright\\n')" > install/alpha
+\t@printf '%s' 'literal $$ dollar' > install/beta
 output/long: input
 \t@printf '%s' '' ' ' 'LONG' > $@
 """
@@ -35,8 +34,13 @@ config = (
     "buildxlConfig 1\n"
     + "path 0 " + json.dumps(str(work / "install")) + "\n"
     + "path 1 " + json.dumps(str(work / "membership.json")) + "\n"
+    + "string 0 \"corpus-slots\"\n"
     + "sealDirectory installation $p0 $p1\n"
     + "inheritEnvironment " + " ".join(payloads) + "\n"
+    + "process\n"
+    + "  option keepOutputsWritable\n"
+    + "  semaphore $s0 4 1\n"
+    + "  enableTempDirectory true\n"
 )
 (work / "policy.config").write_text(config, encoding="utf-8")
 ckati = Path(sys.argv[1]).resolve()

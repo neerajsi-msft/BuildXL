@@ -7,111 +7,103 @@ path 4 /directgraph-conformance/input
 path 5 /directgraph-conformance/install/alpha
 path 6 /directgraph-conformance/install/beta
 path 7 /directgraph-conformance/output/long
-string 0 ["alpha","beta"]
+string 0 corpus-slots
+string 1 ["alpha","beta"]
 	
-string 1  
-string 2 --noprofile
-string 3 
-string 4 -c
-string 5 '
-string 6 /bin/bash
-string 7 ' 
-string 8 -c 
-string 9 printf 
-string 10 \
-string 11 %s
-string 12 "
-string 13 $(__kati_shell_result=$(printf 
-string 14 left\nright\n
-string 15 ) 
-string 16 || 
-string 17 :; 
-string 18 $__kati_shell_result
-string 19 " 
-string 20 | 
-string 21 tr 
-string 22 \n
-string 23 )
-string 24 > 
-string 25 install/alpha
-string 26 DG_C1
-string 27 
-string 28 DG_CR_LF
-string 29 leftright
+string 2  
+string 3 --noprofile
+string 4 
+string 5 -c
+string 6 '
+string 7 /bin/bash
+string 8 ' 
+string 9 -c 
+string 10 printf 
+string 11 \
+string 12 %s
+string 13 "
+string 14 $(__kati_shell_result=$(printf 
+string 15 left\nright\n
+string 16 ) 
+string 17 || 
+string 18 :; 
+string 19 $__kati_shell_result
+string 20 " 
+string 21 | 
+string 22 tr 
+string 23 \n
+string 24 )
+string 25 > 
+string 26 install/alpha
+string 27 &&
+	
+string 28 literal 
+string 29 $ 
+string 30 dollar
+string 31 install/beta
+string 32 DG_C1
+string 33 
+string 34 DG_CR_LF
+string 35 leftright
 		continuation
 	
-string 30 DG_DOLLAR
-string 31 $HOME $$ $(not-expanded) ' " \
-string 32 DG_EMPTY
-string 33 DG_SPACE
-string 34 DG_TABS
-string 35 	leading	and trailing	
-string 36 literal 
-string 37 $ 
-string 38 dollar
-string 39 install/beta
-string 40 chunk 
-string 41 end
-string 42 output/long
+string 36 DG_DOLLAR
+string 37 $HOME $$ $(not-expanded) ' " \
+string 38 DG_EMPTY
+string 39 DG_SPACE
+string 40 DG_TABS
+string 41 	leading	and trailing	
+string 42 chunk 
+string 43 end
+string 44 output/long
 set 0
 	p4
 process action_0000000000000000
 	executable p2
 	workingDirectory p3
-	arguments concat s1 escapeArguments :
-		s2
+	arguments concat s2 escapeArguments :
 		s3
-		s1
 		s4
-		concat - s5 s6 s7 s5 s2 s7 s5 s7 s7 s7 s8 s5 s9 s5 s10 s5 s5 s11 s5 s10 s5 s7 s12 s13 s5 s10 s5 s5 s14 s5 s10 s5 s5 s15 s16 s17 s9 s5 s10 s5 s5 s11 s5 s10 s5 s7 s12 s18 s19 s20 s21 s5 s10 s5 s5 s22 s5 s10 s5 s7 s5 s10 s5 s7 s5 s10 s5 s5 s23 s19 s24 s25 s5
-	environment s26 s27
-	environment s28 s29
-	environment s30 s31
-	environment s32 s3
-	environment s33 s1
+		s2
+		s5
+		concat - s6 s7 s8 s6 s3 s8 s6 s8 s8 s8 s9 s6 s10 s6 s11 s6 s6 s12 s6 s11 s6 s8 s13 s14 s6 s11 s6 s6 s15 s6 s11 s6 s6 s16 s17 s18 s10 s6 s11 s6 s6 s12 s6 s11 s6 s8 s13 s19 s20 s21 s22 s6 s11 s6 s6 s23 s6 s11 s6 s8 s6 s11 s6 s8 s6 s11 s6 s6 s24 s20 s25 s26 s8 s27 s6 s7 s8 s6 s3 s8 s6 s8 s8 s8 s9 s6 s10 s6 s11 s6 s6 s12 s6 s11 s6 s8 s6 s11 s6 s6 s28 s29 s30 s6 s11 s6 s8 s25 s31 s6
+	environment s32 s33
 	environment s34 s35
+	environment s36 s37
+	environment s38 s4
+	environment s39 s2
+	environment s40 s41
 	option dependsOnCurrentOs
+	option keepOutputsWritable
+	semaphore s0 4 1
+	enableTempDirectory true
 	input @0
 	output p5
+	output p6
 process action_0000000000000001
 	executable p2
 	workingDirectory p3
-	arguments concat s1 escapeArguments :
-		s2
+	arguments concat s2 escapeArguments :
 		s3
-		s1
 		s4
-		concat - s5 s6 s7 s5 s2 s7 s5 s7 s7 s7 s8 s5 s9 s5 s10 s5 s5 s11 s5 s10 s5 s7 s5 s10 s5 s5 s36 s37 s38 s5 s10 s5 s7 s24 s39 s5
-	environment s26 s27
-	environment s28 s29
-	environment s30 s31
-	environment s32 s3
-	environment s33 s1
-	environment s34 s35
-	option dependsOnCurrentOs
-	input @0
-	output p6
-process action_0000000000000002
-	executable p2
-	workingDirectory p3
-	arguments concat s1 escapeArguments :
 		s2
-		s3
-		s1
-		s4
-		concat - s5 s6 s7 s5 s2 s7 s5 s7 s7 s7 s8 s5 s9 s5 s10 s5 s5 s11 s5 s10 s5 s7 s5 s10 s5 s5 s5 s10 s5 s7 s5 s10 s5 s7 s5 s10 s5 s7 s5 s10 s5 s5 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s41 s5 s10 s5 s7 s24 s42 s5
-	environment s26 s27
-	environment s28 s29
-	environment s30 s31
-	environment s32 s3
-	environment s33 s1
+		s5
+		concat - s6 s7 s8 s6 s3 s8 s6 s8 s8 s8 s9 s6 s10 s6 s11 s6 s6 s12 s6 s11 s6 s8 s6 s11 s6 s6 s6 s11 s6 s8 s6 s11 s6 s8 s6 s11 s6 s8 s6 s11 s6 s6 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s43 s6 s11 s6 s8 s25 s44 s6
+	environment s32 s33
 	environment s34 s35
+	environment s36 s37
+	environment s38 s4
+	environment s39 s2
+	environment s40 s41
 	option dependsOnCurrentOs
+	option keepOutputsWritable
+	semaphore s0 4 1
+	enableTempDirectory true
 	input @0
 	output p7
 writeFile installation_manifest
 	destination p1
-	content s0
+	content s1
 sealDirectory installation
 	directoryRoot p0
 	sealKind partial

@@ -161,7 +161,8 @@ process compile
 
 This illustrates field syntax, not a complete runnable process; the environment
 name/value references stand for additional string registrations.
-A process has at most one complete `arguments` expression, rooted at `concat`.
+A process has at most one complete `arguments` expression: a bare `sID`/`pID`
+reference or a `concat`.
 Each direct child of an escaping concat is one argument, even when it contains
 deeper concatenations. Child rendering rules are respected before escaping the
 complete child; separators are not escaped. Empty children remain empty

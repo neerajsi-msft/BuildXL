@@ -1571,7 +1571,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 await File.ReadAllTextAsync(Path.Combine(directory, "expected.json"), new UTF8Encoding(false, true)));
             var records = new DirectGraphTextReader(new StringReader(text), "ckati-golden.dg").Read().ToArray();
             var processes = records.Where(record => record.Kind == "process").ToArray();
-            Assert.Equal(3, processes.Length);
+            Assert.Equal(2, processes.Length);
             static string Raw(DirectGraphTextExpression expression) => expression.Kind == "concat"
                 ? string.Join(expression.Value, expression.Children.Select(Raw)) : expression.Value;
             foreach (var process in processes)
@@ -1586,9 +1586,16 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.True(text.Split('\n').Max(line => line.Length) > 8192);
 
             await Load(new[] { Project("golden", text) });
-            Assert.Equal(3, m_operations.Count(operation => operation.AddProcess != null));
+            Assert.Equal(2, m_operations.Count(operation => operation.AddProcess != null));
+            Assert.Single(m_operations.Where(operation => operation.AddProcess?.OutputFiles.Count == 2));
             foreach (var operation in m_operations.Where(operation => operation.AddProcess != null))
             {
+                Assert.True(operation.AddProcess.EnableTempDirectory);
+                var semaphore = Assert.Single(operation.AddProcess.Semaphores);
+                Assert.Equal("corpus-slots", semaphore.Name.ToString(m_paths.StringTable));
+                Assert.Equal(4, semaphore.Limit);
+                Assert.Equal(1, semaphore.IncrementBy);
+                Assert.True(operation.AddProcess.Options.HasFlag(global::BuildXL.Pips.Operations.Process.Options.OutputsMustRemainWritable));
                 var environment = operation.AddProcess.EnvironmentVariables.ToDictionary(
                     variable => variable.Name.ToString(m_paths.StringTable), variable => variable.Data.IsValid
                         ? variable.Data.ToString(m_paths) : variable.Value.ToString(m_paths.StringTable));

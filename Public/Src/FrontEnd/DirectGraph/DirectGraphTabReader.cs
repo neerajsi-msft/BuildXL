@@ -151,7 +151,7 @@ namespace BuildXL.FrontEnd.DirectGraph
                                     if (token.StartsWith("$", StringComparison.Ordinal)) throw Error("Dollar-prefixed references are not supported in DirectGraph 3.");
                                     string value = token.Length > 1 && token[0] == 's' && DirectGraphTextReader.TryId(token.AsSpan(1), out _) ?
                                         ReferenceToken(token, 's') : token;
-                                    if ((name == "option" || (i > 1 && name is "inputDirectory" or "directory" or "rewrite")) &&
+                                    if ((name == "option" || (i > 1 && name is "inputDirectory" or "directory")) &&
                                         ReservedName(value))
                                         throw Error($"Name '{value}' in field '{name}' is reserved for sID/pID references; choose a different name.");
                                     values.Add(value);
