@@ -3,6 +3,7 @@
 
 import {Artifact, Cmd, Transformer} from "Sdk.Transformers";
 import * as Native from "Sdk.Linux.Native";
+import * as Managed from "Sdk.Managed";
 import * as EBPF from "BuildXL.Sandbox.Linux.eBPF";
 
 namespace Test.eBPFSandbox {
@@ -103,5 +104,26 @@ namespace Test.eBPFSandbox {
                 objectFiles: [...pidNamespaceTestObj, EBPF.eBPFSandbox.libbpfa],
                 libraries: [ "pthread", "elf", "z" ]
             })
+        : undefined;
+
+    // This is a runtime test, not a build dependency of the helper. Disabled for build-only validation.
+    @@public
+    export const pidNamespaceIsolationTest = EBPF.eBPFSandbox.hostSupportsBuildingEBPF
+        && Environment.getStringValue(Managed.TestEnvironment.EnableLinuxEBPFSandboxForTestsEnvVar) === "1"
+        ? Transformer.execute({
+            tool: {
+                exe: pidNamespaceTest,
+                dependsOnCurrentHostOSDirectories: true,
+                timeoutInMilliseconds: 60000,
+            },
+            workingDirectory: Context.getNewOutputDirectory("pidNamespaceIsolation"),
+            arguments: [
+                Cmd.argument("--unrelated-namespaces"),
+                Cmd.argument(Artifact.input(EBPF.eBPFSandbox.bpfObjectFile)),
+            ],
+            unsafe: {
+                disableSandboxing: true,
+            },
+        })
         : undefined;
 }

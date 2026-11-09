@@ -95,8 +95,9 @@ int child_main(const char *base_path, int num_threads) {
 
 static int InNewPidNamespace(const std::function<int()>& action) {
     if (unshare(CLONE_NEWPID) != 0) {
-        fprintf(stderr, "unshare(CLONE_NEWPID): %s\n", strerror(errno));
-        return 1;
+        int error = errno;
+        fprintf(stderr, "unshare(CLONE_NEWPID): %s\n", strerror(error));
+        return error == EPERM || error == EACCES || error == ENOSYS ? 77 : 1;
     }
     pid_t child = fork();
     if (child < 0) return 1;
@@ -119,13 +120,23 @@ static int VerifyUnrelatedNamespaces(const char* object_path) {
         _exit(InNewPidNamespace([&]() {
             struct bpf_object* object = bpf_object__open_file(object_path, nullptr);
             if (libbpf_get_error(object)) return 1;
+            // Opening only computes pin paths. Clear every path before load so even PIN_BY_NAME maps
+            // are private to this object: no existing pins are opened and no new pins can be left behind.
+            struct bpf_map* map;
+            bpf_object__for_each_map(map, object) {
+                if (bpf_map__set_pin_path(map, nullptr)) return 1;
+            }
             struct bpf_program* program;
             bpf_object__for_each_program(program, object) {
                 const char* name = bpf_program__name(program);
                 bpf_program__set_autoload(program, strcmp(name, "test_get_current_ns_pid") == 0 ||
                                                    strcmp(name, "get_current_namespace_level") == 0);
             }
-            if (bpf_object__load(object)) return 1;
+            int load_error = bpf_object__load(object);
+            if (load_error) {
+                bpf_object__close(object);
+                return load_error == -EPERM || load_error == -EACCES || load_error == -ENOSYS ? 77 : 1;
+            }
             int level_fd = bpf_program__fd(bpf_object__find_program_by_name(object, "get_current_namespace_level"));
             LIBBPF_OPTS(bpf_test_run_opts, level);
             if (bpf_prog_test_run_opts(level_fd, &level)) return 1;
@@ -138,6 +149,13 @@ static int VerifyUnrelatedNamespaces(const char* object_path) {
             int query = bpf_program__fd(bpf_object__find_program_by_name(object, "test_get_current_ns_pid"));
             LIBBPF_OPTS(bpf_test_run_opts, own);
             if (bpf_prog_test_run_opts(query, &own) || own.retval != (__u32)getpid()) return 1;
+            int nested_result = InNewPidNamespace([&]() {
+                LIBBPF_OPTS(bpf_test_run_opts, nested);
+                int error = bpf_prog_test_run_opts(query, &nested);
+                // This child has PID 1 locally but a different, positive PID in the runner's namespace.
+                return error == 0 && nested.retval > 1 && getpid() == 1 ? 0 : 1;
+            });
+            if (nested_result != 0) return nested_result;
             struct bpf_prog_info info = {};
             __u32 size = sizeof(info);
             if (bpf_prog_get_info_by_fd(query, &info, &size) ||
@@ -175,13 +193,21 @@ static int VerifyUnrelatedNamespaces(const char* object_path) {
     close(ready[0]);
     close(done[1]);
     int status;
-    if (waitpid(loader, &status, 0) != loader || !WIFEXITED(status) || WEXITSTATUS(status) != 0) result = 1;
+    if (waitpid(loader, &status, 0) != loader || !WIFEXITED(status)) result = 1;
+    else if (WEXITSTATUS(status) == 77) result = 77;
+    else if (WEXITSTATUS(status) != 0) result = 1;
     return result;
 }
 
 int main(int argc, char **argv) {
-    if (argc == 3 && strcmp(argv[1], "--unrelated-namespaces") == 0)
-        return VerifyUnrelatedNamespaces(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "--unrelated-namespaces") == 0) {
+        int result = VerifyUnrelatedNamespaces(argv[2]);
+        if (result == 77) {
+            fprintf(stdout, "SKIP: PID-namespace isolation requires PID namespace creation and BPF loading capabilities.\n");
+            return 0;
+        }
+        return result;
+    }
     if (argc == 3 && strcmp(argv[1], "--expect-current-pid") == 0) {
         int expected_pid = atoi(argv[2]);
         if (expected_pid == -1) {
