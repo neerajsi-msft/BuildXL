@@ -304,21 +304,20 @@ load in order, followed by `policyFiles`, then configured exports. Policy-only
 projects are allowed. File mode is mutually exclusive with the external tool's
 `moduleNames`, `tool`, `workingDirectory`, `arguments`, `environment`, and timeout.
 
-Each fragment starts with `directgraph 2`. Unindented records define operations,
-path/string registrations, or dependency sets. Indented fields belong to the preceding operation.
-Blank lines and full-line `#` comments are ignored. Values are whitespace-delimited
-bare tokens or quoted strings; quoted strings support `\\`, `\"`, `\n`, `\r`,
-`\t`, and `\uXXXX`. NUL, malformed escapes, unknown records/fields, duplicate
-scalar fields, and invalid or redefined IDs fail explicitly. There are no variables,
-includes, implicit rules, environment expansion, or embedded evaluation.
+Each fragment starts with `directgraph 3`, the sole supported text format.
+It uses UTF-8 raw registrations, LF framing and exact TAB indentation; quoted
+strings, escape decoding, comments and blank records are not supported.
+See the [DirectGraph README](../../../Public/Src/FrontEnd/DirectGraph/README.md)
+for the authoritative grammar, PipData expressions and artifact-binding rules.
+There are no variables, includes, implicit rules or embedded evaluation.
 
 ```text
-directgraph 2
-path 0 "sdk/api.h"
-string 0 "/* generated */\n"
+directgraph 3
+path 0 sdk/api.h
+string 0 /* generated */
 writeFile generate
-  destination $p0
-  content $s0
+	destination p0
+	content s0
 ```
 
 Operation names are local to a project and may be reused in other projects.
@@ -328,20 +327,15 @@ paths, not imports or producer operation IDs. A path resolves to an earlier
 local output or an artifact published by a direct dependency. Executables use
 the same resolution, including generated executables.
 
-Each `argument` field accepts one or more string references, for example
-`argument $s0 $s1 $s2`. Their values concatenate without separators into one
-logical argument. Whitespace, quotes, and backslashes are preserved, and normal
-command-line escaping applies to the complete argument. The text loader splits
-the escaped spelling at whitespace runs and individual double/single quotes and
-backticks into literal `PipData` chunks rather than interning a whole
-command string. This is a text-only, in-process feature: the gRPC schema remains
-string-ID-only. It does not interpret shell syntax or infer path fragments.
+A process has one optional `arguments` expression rooted at `concat`.
+`concat sSEPARATOR escapeArguments` escapes each complete immediate child as
+one argument; raw nested concats compose strings and deferred paths without
+interpreting shell syntax. See the README for inline (`-`) and block (`:`)
+layouts. The gRPC schema remains string-ID-only.
 
-For `writeFile`, the required single `content` field also accepts multiple string
-references. These concatenate directly into factored `PipData` with no escaping,
-preserving file bytes including whitespace and trailing newlines. The original
-single-reference form remains supported. `sealDirectory content` still names
-paths and is unchanged.
+A `writeFile` has one required `content` expression. Raw string/path leaves and
+concats preserve file bytes, including whitespace and trailing newlines.
+`sealDirectory content` continues to name artifact paths rather than PipData.
 
 For inspecting a fragment without constructing a BuildXL graph, the standalone
 `Examples/DirectGraph/GraphRenderer` tool source-links the same streaming reader.

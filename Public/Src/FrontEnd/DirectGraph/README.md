@@ -138,6 +138,9 @@ escapes it as one argument, then joins the escaped values. The markers only
 select layout; both forms have identical semantics. Inline lists accept only
 references, not nested expressions, and cannot continue on another line.
 Raw text appears only in registrations, not inline literal expressions.
+Typed `sID`/`pID` references are resolved only in documented reference positions.
+Operation, producer and option names remain literal, even when spelled `s12`
+or `p12`; such names are not silently replaced by registered strings.
 
 For example, the indentation below consists of literal TABs. `<SPACE>` denotes
 one literal ASCII space, not a token to emit:
@@ -189,7 +192,10 @@ inline spans, not independently shared tree references. Version 3 consumers and
 postprocessors must support raw registrations, block dependency sets and expressions.
 In particular, an explicit source cannot lie under **any project's shared or
 exclusive opaque root**, in either construction order. BoB's broad uniform
-private writable roots must therefore not contain source files.
+private writable roots must therefore not contain explicit source-file inputs.
+Source seals beneath another project's shared opaque root are allowed when
+native validation accepts them, matching DScript; the loader does not impose
+an additional source-seal overlap restriction.
 An ancestor witness index bounds source/output checks without scanning every
 source. Unlisted opaque file inputs likewise retain their selected producer
 grant so a later sibling's private explicit output cannot bypass the existing

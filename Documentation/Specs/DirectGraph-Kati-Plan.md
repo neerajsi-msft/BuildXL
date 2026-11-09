@@ -630,10 +630,23 @@ reference and composition mechanisms rather than adding new machinery.
   existing per-process encoding and duplicate-name validation; confirm native
   missing-value behavior rather than adding loader policy. Kati's baseline
   comes from its controlled invocation, not a fragment-side baseline API.
-- Keep the text header at `directgraph 2` for additive field exposure: old
-  readers reject unsupported fields rather than silently dropping them.
+- Use `directgraph 3` as the sole text format; regenerate legacy fragments.
+  The DirectGraph README defines the raw/TAB-framed grammar and native PipData
+  expressions. Readers reject unsupported fields rather than silently dropping them.
   Bump `DirectGraphProtocol.Version` for request changes as required by that
   contract; the two version mechanisms are distinct.
+- Kati supports deferred recipe `$(shell)` with bounded runtime substitution:
+  output is not re-parsed as shell, substitutions in single quotes do not run,
+  evaluation follows earlier recipe lines rather than Make's expand-all-lines
+  ordering, and `printf`/`tr` must be available. Deferred exports remain rejected.
+  See `README.buildxl.md` for the full limitations.
+- Kati config can select graph-known installation outputs into partial seals
+  and emit an optional JSON membership manifest. Membership is never scanned
+  from the filesystem. Symlink artifact rejection has been removed from Kati:
+  retain lexical paths and let the consuming executor handle symlinks.
+- Source-seal/output overlap is deferred to native validation, matching DScript.
+  In particular, source seals under shared opaque roots can be accepted;
+  explicit source-file inputs under dynamic roots remain rejected by the loader.
 - Retain existing resolver root-selection semantics and structural validation.
   BoB owns which roots to request and whether an empty requested build is
   acceptable. Do not introduce a new DirectGraph empty-selection policy or
