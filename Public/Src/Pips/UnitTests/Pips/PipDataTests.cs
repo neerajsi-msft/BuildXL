@@ -209,14 +209,40 @@ namespace Test.BuildXL.Pips
             Assert.Equal(CommandLineEscaping.EscapeAsCommandLineWord("-Iroot with spaces") + " | " +
                 CommandLineEscaping.EscapeAsCommandLineWord(quotedChild),
                 data.ToString(_ => "root with spaces", m_pathTable.StringTable));
-            string ipcChild = AbstractParser.CommonEscapeArg("already quoted");
             Assert.Equal(AbstractParser.CommonEscapeArg("-I" + m_uniqueEntry0.ToString(m_pathTable)) + " | " +
-                AbstractParser.CommonEscapeArg(ipcChild),
+                AbstractParser.CommonEscapeArg(quotedChild),
                 data.ToString(new PipFragmentRenderer(m_pathTable), useIpcEscaping: true));
             raw.Clear();
             var empty = raw.ToPipData(" ", PipDataFragmentEscaping.EscapeEachArgument);
             Assert.Equal("", empty.ToString(m_pathTable));
             Assert.Equal(0, empty.GetMaxPossibleLength(m_pathTable.StringTable));
+        }
+
+        [Fact]
+        public void OrdinaryNestedCRuntimeEscapingDoesNotInheritIpcEscaping()
+        {
+            var child = new PipDataBuilder(m_pathTable.StringTable);
+            child.Add("a b");
+            child.Add("a\\\"b");
+            var nested = child.ToPipData(" ", PipDataFragmentEscaping.CRuntimeArgumentRules);
+            var parent = new PipDataBuilder(m_pathTable.StringTable);
+            parent.Add(nested);
+            var data = parent.ToPipData(" ", PipDataFragmentEscaping.NoEscaping);
+            Assert.Equal(nested.ToString(m_pathTable),
+                data.ToString(new PipFragmentRenderer(m_pathTable), useIpcEscaping: true));
+            Assert.Equal(data.ToString(m_pathTable).Length, data.GetMaxPossibleLength(m_pathTable.StringTable));
+        }
+
+        [Theory]
+        [InlineData(PipDataFragmentEscaping.NoEscaping, -3)]
+        [InlineData(PipDataFragmentEscaping.CRuntimeArgumentRules, -3)]
+        [InlineData(PipDataFragmentEscaping.EscapeEachArgument, 0)]
+        public void EmptyFragmentLengthPreservesLegacySeparatorAdjustment(PipDataFragmentEscaping escaping, int expected)
+        {
+            var builder = new PipDataBuilder(m_pathTable.StringTable);
+            var data = builder.ToPipData(" | ", escaping);
+            var method = typeof(PipData).GetMethod("GetMaxLength", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            Assert.Equal(expected, (int)method.Invoke(null, new object[] { data, new PipFragmentRenderer(m_pathTable) }));
         }
 
         [Fact]

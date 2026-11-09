@@ -269,7 +269,7 @@ namespace BuildXL.Pips.Operations
 #if DEBUG
             // Expensive check on in DEBUG builds: costs 6% percent of entire runtime
             string actualValue = ToString(renderer);
-            Contract.Assert(computedLength >= actualValue.Length);
+            Contract.Assert(UsesConservativeEscaping(this) ? computedLength >= actualValue.Length : computedLength == actualValue.Length);
 #endif
 
             return computedLength;
@@ -310,13 +310,16 @@ namespace BuildXL.Pips.Operations
                     {
                         using (var scratch = Pools.GetStringBuilder())
                         {
-                            AppendPipData(scratch.Instance, fragment.GetNestedFragmentValue(), renderer, useIpcEscaping);
+                            var nested = fragment.GetNestedFragmentValue();
+                            AppendPipData(scratch.Instance, nested, renderer, useIpcEscaping && IsArgumentEscaping(nested.FragmentEscaping));
                             AppendEscapedArgument(builder, scratch.Instance.ToString(), useIpcEscaping);
                         }
                     }
                     else
                     {
-                        AppendPipData(builder, fragment.GetNestedFragmentValue(), renderer, useIpcEscaping);
+                        var nested = fragment.GetNestedFragmentValue();
+                        // Ordinary nested data has always used command-line escaping, even inside IPC data.
+                        AppendPipData(builder, nested, renderer, useIpcEscaping && IsArgumentEscaping(nested.FragmentEscaping));
                     }
                     continue;
                 }
@@ -358,11 +361,12 @@ namespace BuildXL.Pips.Operations
             {
                 Contract.Requires(pipData.FragmentCount == 1);
                 // Quotes and backslashes can expand at chunk boundaries; bound the complete value.
-                return checked(2 * GetMaxLength(pipData.With(pipData.FragmentSeparator, PipDataFragmentEscaping.NoEscaping), renderer) + 2);
+                return checked(2 * Math.Max(GetMaxLength(pipData.With(pipData.FragmentSeparator, PipDataFragmentEscaping.NoEscaping), renderer), 0) + 2);
             }
 
             int fragmentSeparatorLength = renderer.GetLength(pipData.FragmentSeparator, PipDataFragmentEscaping.NoEscaping);
-            int length = fragmentSeparatorLength * Math.Max(pipData.FragmentCount - 1, 0);
+            int length = fragmentSeparatorLength * (pipData.FragmentEscaping == PipDataFragmentEscaping.EscapeEachArgument
+                ? Math.Max(pipData.FragmentCount - 1, 0) : pipData.FragmentCount - 1);
             foreach (PipFragment fragment in pipData)
             {
                 Contract.Assume(fragment.FragmentType != PipFragmentType.Invalid);
@@ -372,7 +376,7 @@ namespace BuildXL.Pips.Operations
                 {
                     int nestedLength = GetMaxLength(fragment.GetNestedFragmentValue(), renderer);
                     length = pipData.FragmentEscaping == PipDataFragmentEscaping.EscapeEachArgument
-                        ? checked(length + 2 * nestedLength + 2)
+                        ? checked(length + 2 * Math.Max(nestedLength, 0) + 2)
                         : length + nestedLength;
                     continue;
                 }
@@ -385,6 +389,22 @@ namespace BuildXL.Pips.Operations
 
             return length;
         }
+
+        private static bool IsArgumentEscaping(PipDataFragmentEscaping escaping) =>
+            escaping is PipDataFragmentEscaping.EscapeArgument or PipDataFragmentEscaping.EscapeEachArgument;
+
+#if DEBUG
+        private static bool UsesConservativeEscaping(in PipData data)
+        {
+            if (IsArgumentEscaping(data.FragmentEscaping)) return true;
+            foreach (var fragment in data)
+            {
+                if (fragment.FragmentType == PipFragmentType.NestedFragment &&
+                    UsesConservativeEscaping(fragment.GetNestedFragmentValue())) return true;
+            }
+            return false;
+        }
+#endif
 
         #region IEquatable<PipData> implementation
 
