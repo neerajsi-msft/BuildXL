@@ -70,6 +70,10 @@ namespace Test.DirectGraph {
         ],
         runtimeContent: [
             {
+                subfolder: r`fixtures/KatiV3`,
+                contents: [f`Fixtures/KatiV3/golden.dg`, f`Fixtures/KatiV3/expected.json`],
+            },
+            {
                 // CODESYNC: IntegrationTests/DirectGraphIntegrationTests.cs
                 subfolder: r`tools/GraphEmitter`,
                 contents: [graphEmitter],

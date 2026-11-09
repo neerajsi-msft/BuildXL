@@ -1,0 +1,119 @@
+directgraph 3
+path 0 /directgraph-conformance/install
+path 1 /directgraph-conformance/membership.json
+path 2 /bin/bash
+path 3 /directgraph-conformance
+path 4 /directgraph-conformance/input
+path 5 /directgraph-conformance/install/alpha
+path 6 /directgraph-conformance/install/beta
+path 7 /directgraph-conformance/output/long
+string 0 ["alpha","beta"]
+	
+string 1  
+string 2 --noprofile
+string 3 
+string 4 -c
+string 5 '
+string 6 /bin/bash
+string 7 ' 
+string 8 -c 
+string 9 printf 
+string 10 \
+string 11 %s
+string 12 "
+string 13 $(__kati_shell_result=$(printf 
+string 14 left\nright\n
+string 15 ) 
+string 16 || 
+string 17 :; 
+string 18 $__kati_shell_result
+string 19 " 
+string 20 | 
+string 21 tr 
+string 22 \n
+string 23 )
+string 24 > 
+string 25 install/alpha
+string 26 DG_C1
+string 27 
+string 28 DG_CR_LF
+string 29 leftright
+		continuation
+	
+string 30 DG_DOLLAR
+string 31 $HOME $$ $(not-expanded) ' " \
+string 32 DG_EMPTY
+string 33 DG_SPACE
+string 34 DG_TABS
+string 35 	leading	and trailing	
+string 36 literal 
+string 37 $ 
+string 38 dollar
+string 39 install/beta
+string 40 chunk 
+string 41 end
+string 42 output/long
+set 0
+	p4
+process action_0000000000000000
+	executable p2
+	workingDirectory p3
+	arguments concat s1 escapeArguments :
+		s2
+		s3
+		s1
+		s4
+		concat - s5 s6 s7 s5 s2 s7 s5 s7 s7 s7 s8 s5 s9 s5 s10 s5 s5 s11 s5 s10 s5 s7 s12 s13 s5 s10 s5 s5 s14 s5 s10 s5 s5 s15 s16 s17 s9 s5 s10 s5 s5 s11 s5 s10 s5 s7 s12 s18 s19 s20 s21 s5 s10 s5 s5 s22 s5 s10 s5 s7 s5 s10 s5 s7 s5 s10 s5 s5 s23 s19 s24 s25 s5
+	environment s26 s27
+	environment s28 s29
+	environment s30 s31
+	environment s32 s3
+	environment s33 s1
+	environment s34 s35
+	option dependsOnCurrentOs
+	input @0
+	output p5
+process action_0000000000000001
+	executable p2
+	workingDirectory p3
+	arguments concat s1 escapeArguments :
+		s2
+		s3
+		s1
+		s4
+		concat - s5 s6 s7 s5 s2 s7 s5 s7 s7 s7 s8 s5 s9 s5 s10 s5 s5 s11 s5 s10 s5 s7 s5 s10 s5 s5 s36 s37 s38 s5 s10 s5 s7 s24 s39 s5
+	environment s26 s27
+	environment s28 s29
+	environment s30 s31
+	environment s32 s3
+	environment s33 s1
+	environment s34 s35
+	option dependsOnCurrentOs
+	input @0
+	output p6
+process action_0000000000000002
+	executable p2
+	workingDirectory p3
+	arguments concat s1 escapeArguments :
+		s2
+		s3
+		s1
+		s4
+		concat - s5 s6 s7 s5 s2 s7 s5 s7 s7 s7 s8 s5 s9 s5 s10 s5 s5 s11 s5 s10 s5 s7 s5 s10 s5 s5 s5 s10 s5 s7 s5 s10 s5 s7 s5 s10 s5 s7 s5 s10 s5 s5 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s40 s41 s5 s10 s5 s7 s24 s42 s5
+	environment s26 s27
+	environment s28 s29
+	environment s30 s31
+	environment s32 s3
+	environment s33 s1
+	environment s34 s35
+	option dependsOnCurrentOs
+	input @0
+	output p7
+writeFile installation_manifest
+	destination p1
+	content s0
+sealDirectory installation
+	directoryRoot p0
+	sealKind partial
+	content p5
+	content p6

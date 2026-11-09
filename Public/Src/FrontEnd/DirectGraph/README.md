@@ -138,9 +138,11 @@ escapes it as one argument, then joins the escaped values. The markers only
 select layout; both forms have identical semantics. Inline lists accept only
 references, not nested expressions, and cannot continue on another line.
 Raw text appears only in registrations, not inline literal expressions.
-Typed `sID`/`pID` references are resolved only in documented reference positions.
-Operation, producer and option names remain literal, even when spelled `s12`
-or `p12`; such names are not silently replaced by registered strings.
+Names matching `[sp][0-9]+` (including leading-zero spellings) are reserved and
+cannot name operations, producers or options. Choose another spelling such as
+`step12`. Scalar metadata, including producer selectors, may use `sID` references;
+the reserved-name rule prevents those references from silently changing the
+meaning of a legitimate operation name.
 
 For example, the indentation below consists of literal TABs. `<SPACE>` denotes
 one literal ASCII space, not a token to emit:

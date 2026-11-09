@@ -1,0 +1,8 @@
+{
+  "DG_TABS": "\tleading\tand trailing\t",
+  "DG_CR_LF": "left\rright\n\tcontinuation\n",
+  "DG_SPACE": " ",
+  "DG_DOLLAR": "$HOME $$ $(not-expanded) ' \" \\",
+  "DG_C1": "",
+  "DG_EMPTY": ""
+}

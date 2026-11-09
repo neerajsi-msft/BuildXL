@@ -171,7 +171,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 new DirectGraphTextLoader.SharedState(m_context.PathTable, new[] { settings }));
             loader.LoadProjectAsync(settings,
                 new Dictionary<DirectGraphProject, global::BuildXL.FrontEnd.Utilities.GenericProjectGraphResolver.ProjectGraphOutputs>(),
-                _ => new StringReader($$"""
+                _ => new StringReader(DirectGraphFixtureFiles.NormalizeSourceLiteral($$"""
                     directgraph 3
                     path 0 tool.exe
                     path 1 .
@@ -200,7 +200,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}option keepOutputsWritable
                     {{"\t"}}output p2
 
-                    """), _ => true, CancellationToken.None).GetAwaiter().GetResult();
+                    """)), _ => true, CancellationToken.None).GetAwaiter().GetResult();
             var text = Assert.Single(graph.RetrieveScheduledPips().OfType<Process>());
             Assert.Equal(wire.Arguments.ToString(m_context.PathTable), text.Arguments.ToString(m_context.PathTable));
             Assert.Equal(wire.EnvironmentVariables.ToArray(), text.EnvironmentVariables.ToArray());

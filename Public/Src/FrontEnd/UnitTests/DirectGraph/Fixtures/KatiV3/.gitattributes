@@ -1,0 +1,2 @@
+# Raw payloads intentionally include trailing spaces, TABs and literal CR.
+golden.dg -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
