@@ -48,7 +48,7 @@
 
 
 /** Constants */
-const int PINNED_MAPS_SIZE = 11;
+const int PINNED_PER_PIP_MAPS_SIZE = 11;
 
 /** Globals */
 BxlObserver *g_bxl;
@@ -842,8 +842,36 @@ int UnpinStaleMaps(struct sandbox_bpf *skel) {
 
 // Reuses the pinned maps, assuming bpf is already loaded.
 int ReuseMaps(struct sandbox_bpf *skel) {
-    // These are the `PINNED_MAPS_SIZE` pinned maps we have. Retrieve their pin paths and reuse them
-    bpf_map* pinned_maps[PINNED_MAPS_SIZE] = {
+    // Validate before binding or mutating any shared per-pip maps. Never replace another namespace's live pins.
+    struct stat namespace_stat;
+    if (stat("/proc/self/ns/pid", &namespace_stat) != 0) {
+        LogError("Cannot validate PID namespace before reusing EBPF programs: %s\n", strerror(errno));
+        return -1;
+    }
+    const char* namespace_pin = bpf_map__get_pin_path(skel->maps.runner_pid_ns_inode);
+    int namespace_fd = namespace_pin ? bpf_obj_get(namespace_pin) : -1;
+    if (namespace_fd < 0) {
+        LogError("Cannot reuse EBPF programs: pinned runner PID namespace identity is unavailable. "
+                 "Use an isolated BPF pin mount, or restart the sandbox after active builds finish.\n");
+        return -1;
+    }
+    __u64 stored_inode = 0;
+    int lookup = bpf_map_lookup_elem(namespace_fd, &ZERO, &stored_inode);
+    int lookup_errno = errno;
+    close(namespace_fd);
+    if (lookup != 0) {
+        LogError("Cannot read pinned runner PID namespace identity: %s\n", strerror(lookup_errno));
+        return -1;
+    }
+    if (stored_inode != (__u64)namespace_stat.st_ino) {
+        LogError("Cannot reuse EBPF programs across PID namespaces: loaded namespace inode %llu, current %llu. "
+                 "Use an isolated BPF pin mount; existing pins have not been changed.\n",
+                 (unsigned long long)stored_inode, (unsigned long long)namespace_stat.st_ino);
+        return -1;
+    }
+
+    // Namespace identity is validated separately; these maps hold shared per-pip state.
+    bpf_map* pinned_maps[PINNED_PER_PIP_MAPS_SIZE] = {
         skel->maps.pid_map, 
         skel->maps.file_access_per_pip, 
         skel->maps.debug_buffer_per_pip,
@@ -857,7 +885,7 @@ int ReuseMaps(struct sandbox_bpf *skel) {
         skel->maps.untracked_scopes_per_pip
     };
 
-    for (int i = 0 ; i < PINNED_MAPS_SIZE; i++)
+    for (int i = 0 ; i < PINNED_PER_PIP_MAPS_SIZE; i++)
     {
         bpf_map* pinned_map = pinned_maps[i];
         int pin_fd = bpf_obj_get(bpf_map__get_pin_path(pinned_map));
@@ -1046,8 +1074,21 @@ int SetupMaps(struct sandbox_bpf *skel) {
             return -1;
         }
         __u64 namespace_inode = namespace_stat.st_ino;
-        if (bpf_map_update_elem(runner_pid_ns_inode_fd, &ZERO, &namespace_inode, BPF_ANY) ||
-            bpf_map_freeze(runner_pid_ns_inode_fd)) {
+        __u64 stored_inode = 0;
+        if (bpf_map_lookup_elem(runner_pid_ns_inode_fd, &ZERO, &stored_inode)) {
+            LogError("Failed to read runner PID namespace identity: %s\n", strerror(errno));
+            Cleanup(skel);
+            return -1;
+        }
+        if (stored_inode != 0 && stored_inode != namespace_inode) {
+            LogError("Loaded EBPF maps belong to a different PID namespace. Use an isolated BPF pin mount.\n");
+            Cleanup(skel);
+            return -1;
+        }
+        // A previous load in this namespace may have left this immutable map pinned and frozen.
+        if (stored_inode == 0 &&
+            (bpf_map_update_elem(runner_pid_ns_inode_fd, &ZERO, &namespace_inode, BPF_ANY) ||
+             bpf_map_freeze(runner_pid_ns_inode_fd))) {
             LogError("Failed to publish runner PID namespace identity: %s\n", strerror(errno));
             Cleanup(skel);
             return -1;
@@ -1256,10 +1297,10 @@ int SetupMaps(struct sandbox_bpf *skel) {
     return 0;
 }
 
-// Defensively cleans up all the pinned maps that we have created.
+// Clear shared per-pip state, never the pinned immutable namespace identity.
 int CleanupPinnedMaps(struct sandbox_bpf *skel) {
     // We don't care about cleaning up the debug ring buffer map, ring buffers should get clean up automatically
-    bpf_map* pinned_maps[PINNED_MAPS_SIZE] = {
+    bpf_map* pinned_maps[PINNED_PER_PIP_MAPS_SIZE] = {
         skel->maps.pid_map, 
         skel->maps.file_access_per_pip, 
         skel->maps.debug_buffer_per_pip, 
@@ -1273,7 +1314,7 @@ int CleanupPinnedMaps(struct sandbox_bpf *skel) {
         skel->maps.untracked_scopes_per_pip
     };
 
-    for (int i = 0 ; i < PINNED_MAPS_SIZE; i++) {
+    for (int i = 0 ; i < PINNED_PER_PIP_MAPS_SIZE; i++) {
         bpf_map* pinned_map = pinned_maps[i];
 
         int res = buildxl::linux::ebpf::ClearBpfMap(bpf_map__fd(pinned_map), bpf_map__key_size(pinned_map));

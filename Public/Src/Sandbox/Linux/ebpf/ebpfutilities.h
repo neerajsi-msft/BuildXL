@@ -264,6 +264,7 @@ struct {
     __type(key, __u32);
     __type(value, __u64);
     __uint(max_entries, 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __uint(map_flags, BPF_F_RDONLY_PROG);
 } runner_pid_ns_inode SEC(".maps");
 
