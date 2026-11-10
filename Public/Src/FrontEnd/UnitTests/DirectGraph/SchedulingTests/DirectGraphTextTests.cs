@@ -1085,6 +1085,32 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Contains("Duplicate seal content", error.Message);
         }
 
+        [Theory]
+        [InlineData(null)]
+        [InlineData("3600000")]
+        public async Task ProcessTimeoutUsesNativeConstruction(string milliseconds)
+        {
+            string timeout = milliseconds == null ? "" : $"\ttimeoutInMilliseconds {milliseconds}\n";
+            var project = Project("p", "directgraph 3\npath 0 tool\npath 1 .\nstring 0 tool\nwriteFile tool\n\tdestination p0\n\tcontent s0\nprocess run\n\texecutable p0\n\tworkingDirectory p1\n" + timeout);
+            await Load(new[] { project });
+            var process = Assert.Single(m_pipGraph.RetrieveScheduledPips().OfType<Process>());
+            Assert.Equal(milliseconds == null ? (TimeSpan?)null : TimeSpan.FromHours(1), process.Timeout);
+        }
+
+        [Theory]
+        [InlineData("0")]
+        [InlineData("-1")]
+        [InlineData("1.5")]
+        [InlineData("invalid")]
+        [InlineData("2147483648")]
+        [InlineData("3600000\n\ttimeoutInMilliseconds 3600000")]
+        public async Task InvalidProcessTimeoutFailsWithRecordContext(string milliseconds)
+        {
+            var project = Project("p", "directgraph 3\npath 0 tool\npath 1 .\nstring 0 tool\nwriteFile tool\n\tdestination p0\n\tcontent s0\nprocess run\n\texecutable p0\n\tworkingDirectory p1\n\ttimeoutInMilliseconds " + milliseconds + "\n");
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Load(new[] { project }));
+            Assert.Contains("p/run", error.Message);
+        }
+
         [Fact]
         public async Task TempAndSemaphoreFieldsUseNativeConstruction()
         {

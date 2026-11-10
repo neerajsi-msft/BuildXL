@@ -391,6 +391,13 @@ namespace BuildXL.FrontEnd.DirectGraph
             var usage = fields.DataRows("description");
             if (usage.Count > 1) throw new InvalidDataException("Field 'description' must occur at most once.");
             if (usage.Count == 1) process.Usage = CreatePipData(project, usage[0].Expression);
+            string timeout = fields.One("timeoutInMilliseconds");
+            if (timeout != null)
+            {
+                if (!int.TryParse(timeout, NumberStyles.None, CultureInfo.InvariantCulture, out int milliseconds) || milliseconds <= 0)
+                    throw new InvalidDataException("timeoutInMilliseconds expects a positive 32-bit integer.");
+                process.Timeout = TimeSpan.FromMilliseconds(milliseconds);
+            }
             string temp = fields.One("tempDirectory");
             if (temp != null)
             {
