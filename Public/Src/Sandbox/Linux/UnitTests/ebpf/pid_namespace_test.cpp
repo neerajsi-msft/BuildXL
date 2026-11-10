@@ -161,6 +161,11 @@ static int LoadNamespaceQuery(const char* object_path, const std::string& parent
         bpf_program__set_autoload(program, strcmp(name, "test_get_current_ns_pid") == 0 ||
                                            strcmp(name, "get_current_namespace_level") == 0);
     }
+    // The runner normally sizes these maps; query-only tests need minimal valid sizes.
+    struct bpf_map* candidate;
+    bpf_object__for_each_map(candidate, *object) {
+        if (bpf_map__max_entries(candidate) == 0 && bpf_map__set_max_entries(candidate, 1)) return 1;
+    }
     int error = bpf_object__load(*object);
     if (error) return error == -EPERM || error == -EACCES || error == -ENOSYS ? 77 : 1;
     int level_fd = bpf_program__fd(bpf_object__find_program_by_name(*object, "get_current_namespace_level"));
@@ -266,6 +271,7 @@ int main(int argc, char **argv) {
             fprintf(stdout, "SKIP: PID-namespace isolation requires PID namespace creation and BPF loading capabilities.\n");
             return 0;
         }
+        if (result == 0) fprintf(stdout, "PID namespace separation and nested acceptance passed\n");
         return result;
     }
     if (argc == 3 && strcmp(argv[1], "--expect-current-pid") == 0) {
