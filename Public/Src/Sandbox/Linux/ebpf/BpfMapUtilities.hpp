@@ -15,8 +15,13 @@ inline bool ProgramReferencesMap(int program_fd, __u32 map_id)
     bpf_prog_info info = {};
     __u32 size = sizeof(info);
     if (bpf_prog_get_info_by_fd(program_fd, &info, &size) != 0 || info.nr_map_ids == 0) return false;
-    std::vector<__u32> maps(info.nr_map_ids);
+    __u32 map_count = info.nr_map_ids;
+    std::vector<__u32> maps(map_count);
+    // Returned bytecode lengths must not be resubmitted without output buffers.
+    info = {};
+    info.nr_map_ids = map_count;
     info.map_ids = (__u64)(uintptr_t)maps.data();
+    size = sizeof(info);
     if (bpf_prog_get_info_by_fd(program_fd, &info, &size) != 0) return false;
     for (auto id : maps) if (id == map_id) return true;
     return false;

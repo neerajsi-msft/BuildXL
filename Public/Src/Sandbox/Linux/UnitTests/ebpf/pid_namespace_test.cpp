@@ -179,6 +179,11 @@ static int LoadNamespaceQuery(const char* object_path, const std::string& parent
     if (bpf_map_get_info_by_fd(bpf_object__find_map_fd_by_name(*object, "runner_pid_ns_inode"), &map, &size)) return 1;
     query->map_id = map.id;
     int fd = bpf_program__fd(bpf_object__find_program_by_name(*object, "test_get_current_ns_pid"));
+    if (!buildxl::linux::ebpf::ProgramReferencesMap(fd, map.id) ||
+        buildxl::linux::ebpf::ProgramReferencesMap(level_fd, map.id)) {
+        fprintf(stderr, "Namespace program map-reference detection failed\n");
+        return 1;
+    }
     struct bpf_prog_info info = {};
     size = sizeof(info);
     if (bpf_prog_get_info_by_fd(fd, &info, &size)) return 1;
