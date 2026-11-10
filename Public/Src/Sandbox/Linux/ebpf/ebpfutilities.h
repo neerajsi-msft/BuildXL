@@ -36,10 +36,7 @@ __attribute__((always_inline)) static long get_flags(void *ringbuffer) {
 
 /*
  * Map containing currently active process id -> runner pid. Root process id is pre-populated by the userspace.
- * Observe these pids are the ones corresponding to the root namespace. So the assumption is that
- * BuildXL is running in the root namespace, otherwise pids won't match.
- * TODO: Ideally we should always return pids corresponding with the same namespace where BuildXL was launched
- * (which in an arbitrary situation might not be the root one)
+ * PIDs are translated to the runner's PID namespace. Each namespace has its own pinned map set.
  */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
