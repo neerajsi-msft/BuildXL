@@ -96,6 +96,28 @@ namespace Test.eBPFSandbox {
     const pidNamespaceTestObj = pidNamespaceTestSources.map(compile);
 
     @@public
+    export const pidNamespacePinUnitTest = EBPF.eBPFSandbox.hostSupportsBuildingEBPF
+        ? Native.Linux.Compilers.link({
+            outputName: a`pid_namespace_pins_test`,
+            tool: Native.Linux.Compilers.gxxTool,
+            objectFiles: [compile(f`pid_namespace_pins_test.cpp`)],
+            libraries: ["pthread"],
+        })
+        : undefined;
+
+    const pinUnitDirectory = Context.getNewOutputDirectory("pidNamespacePinUnit");
+
+    @@public
+    export const pidNamespacePinUnitTestRun = EBPF.eBPFSandbox.hostSupportsBuildingEBPF
+        ? Transformer.execute({
+            tool: { exe: pidNamespacePinUnitTest, dependsOnCurrentHostOSDirectories: true },
+            workingDirectory: pinUnitDirectory,
+            arguments: [],
+            outputs: [{ kind: "exclusive", directory: pinUnitDirectory }],
+        })
+        : undefined;
+
+    @@public
     export const pidNamespaceTest = EBPF.eBPFSandbox.hostSupportsBuildingEBPF
         ?
             Native.Linux.Compilers.link({
@@ -105,6 +127,8 @@ namespace Test.eBPFSandbox {
                 libraries: [ "pthread", "elf", "z" ]
             })
         : undefined;
+
+    const namespaceIsolationDirectory = Context.getNewOutputDirectory("pidNamespaceIsolation");
 
     // This is a runtime test, not a build dependency of the helper. Disabled for build-only validation.
     @@public
@@ -116,7 +140,8 @@ namespace Test.eBPFSandbox {
                 dependsOnCurrentHostOSDirectories: true,
                 timeoutInMilliseconds: 60000,
             },
-            workingDirectory: Context.getNewOutputDirectory("pidNamespaceIsolation"),
+            workingDirectory: namespaceIsolationDirectory,
+            outputs: [{ kind: "exclusive", directory: namespaceIsolationDirectory }],
             arguments: [
                 Cmd.argument("--unrelated-namespaces"),
                 Cmd.argument(Artifact.input(EBPF.eBPFSandbox.bpfObjectFile)),

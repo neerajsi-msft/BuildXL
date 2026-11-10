@@ -7,6 +7,9 @@
 #include "bpf/libbpf_common.h"
 #include <cstdint>
 #include <unistd.h>
+#include <sys/stat.h>
+#include "../../ebpf/PidNamespacePins.hpp"
+#include "../../ebpf/BpfMapUtilities.hpp"
 
 #pragma once
 
@@ -73,6 +76,16 @@ void GetProgramFullName(const struct bpf_prog_info *prog_info, int prog_fd, char
  */
 int GetTestProgramFd(const char* program_name)
 {
+    struct stat ns;
+    if (stat("/proc/self/ns/pid", &ns)) return -1;
+    std::string pin = buildxl::linux::ebpf::PidNamespacePinRoot("/sys/fs/bpf", ns.st_ino) + "/runner_pid_ns_inode";
+    int namespace_fd = bpf_obj_get(pin.c_str());
+    if (namespace_fd < 0) return -1;
+    struct bpf_map_info namespace_info = {};
+    __u32 info_size = sizeof(namespace_info);
+    int error = bpf_map_get_info_by_fd(namespace_fd, &namespace_info, &info_size);
+    close(namespace_fd);
+    if (error) return -1;
      __u32 id = 0;
     int err, fd = 0;
     char prog_name[128];
@@ -96,13 +109,15 @@ int GetTestProgramFd(const char* program_name)
         err = bpf_obj_get_info_by_fd(fd, &info, &len);
         if (err || !info.name)
         {
+            close(fd);
             continue;
         }
         // Check whether we find a program that is our loading witness
         // (this is just an arbitrarily picked program among all the ones we load)
         GetProgramFullName(&info, fd, prog_name, sizeof(prog_name));
 
-        if (strcmp(prog_name, program_name) == 0) {
+        if (strcmp(prog_name, program_name) == 0 &&
+            buildxl::linux::ebpf::ProgramReferencesMap(fd, namespace_info.id)) {
             return fd;
         }
 
