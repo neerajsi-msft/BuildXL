@@ -108,6 +108,8 @@ namespace BuildXL.FrontEnd.DirectGraph
                 }
                 if (kind is not ("process" or "writeFile" or "copyFile" or "sealDirectory" or "composeSharedOpaque" or "export"))
                     throw Error($"Unknown operation '{kind}'.");
+                if (ReservedName(header[1]))
+                    throw Error($"Record name '{header[1]}' is reserved for sID/pID references; choose a different name.");
                 var record = new DirectGraphTextRecord(kind, header[1], $"{m_file}:{m_line}");
                 Advance();
                 while (Depth() > 0)
@@ -147,8 +149,12 @@ namespace BuildXL.FrontEnd.DirectGraph
                                 else
                                 {
                                     if (token.StartsWith("$", StringComparison.Ordinal)) throw Error("Dollar-prefixed references are not supported in DirectGraph 3.");
-                                    values.Add(token.Length > 1 && token[0] == 's' && DirectGraphTextReader.TryId(token.AsSpan(1), out _) ?
-                                        ReferenceToken(token, 's') : token);
+                                    string value = token.Length > 1 && token[0] == 's' && DirectGraphTextReader.TryId(token.AsSpan(1), out _) ?
+                                        ReferenceToken(token, 's') : token;
+                                    if ((name == "option" || (i > 1 && name is "inputDirectory" or "directory")) &&
+                                        ReservedName(value))
+                                        throw Error($"Name '{value}' in field '{name}' is reserved for sID/pID references; choose a different name.");
+                                    values.Add(value);
                                 }
                             }
                         }
@@ -247,6 +253,14 @@ namespace BuildXL.FrontEnd.DirectGraph
         }
 
         private static bool Bare(string token) => token.Length > 0 && !token.Any(c => char.IsWhiteSpace(c) || char.IsControl(c) || c is '"' or '\\');
+
+        private static bool ReservedName(string name)
+        {
+            if (name.Length < 2 || name[0] is not ('s' or 'p')) return false;
+            for (int i = 1; i < name.Length; i++)
+                if (name[i] < '0' || name[i] > '9') return false;
+            return true;
+        }
 
         private string ReferenceToken(string token, char type)
         {

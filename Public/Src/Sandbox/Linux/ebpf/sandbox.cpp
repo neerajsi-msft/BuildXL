@@ -13,6 +13,7 @@
 #include <string>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -32,6 +33,7 @@
  */
 #include "EventRingBuffer.hpp"
 #include "BpfMapUtilities.hpp"
+#include "PidNamespacePins.hpp"
 #include "bxl_observer.hpp"
 #include "ConcurrentQueue.h"
 #include "SyscallHandler.h"
@@ -47,7 +49,7 @@
 
 
 /** Constants */
-const int PINNED_MAPS_SIZE = 11;
+const int PINNED_PER_PIP_MAPS_SIZE = 11;
 
 /** Globals */
 BxlObserver *g_bxl;
@@ -253,59 +255,12 @@ void GetProgramFullName(const struct bpf_prog_info *prog_info, int prog_fd, char
 }
 
 /**
- * Retrieves the file descriptor of a BPF program by its name.
- * The given program_name should be smaller than MAX_PROG_FULL_NAME. This is an arbitrary size, it can be increased if needed.
- */
-int GetProgramFd(const char* program_name)
-{
-    assert(strlen(program_name) < MAX_PROG_FULL_NAME && "program_name exceeds MAX_PROG_FULL_NAME, no match is possible");
-
-    __u32 id = 0;
-    int err, fd = 0;
-    char prog_name[MAX_PROG_FULL_NAME];
-
-    // Iterate over all bpf programs
-    while (true) {
-        err = bpf_prog_get_next_id(id, &id);
-        if (err) {
-            break;
-        }
-
-        fd = bpf_prog_get_fd_by_id(id);
-        if (fd < 0) {
-            continue;
-        }
-
-        // We got a program with a valid file descriptor, retrieve its info
-        struct bpf_prog_info info = {};
-        __u32 len = sizeof(info);
-
-        err = bpf_obj_get_info_by_fd(fd, &info, &len);
-        if (err || !info.name)
-        {
-            continue;
-        }
-        // Check whether we find a program that is our loading witness
-        // (this is just an arbitrarily picked program among all the ones we load)
-        GetProgramFullName(&info, fd, prog_name, sizeof(prog_name));
-
-        if (strcmp(prog_name, program_name) == 0) {
-            return fd;
-        }
-
-        close(fd);
-	}
-
-    return -1;
-}
-
-/**
  * Retrieves the current process namespace level by calling a custom bpf program.
  */
-int GetCurrentProcessNamespaceLevel() {
+int GetCurrentProcessNamespaceLevel(struct sandbox_bpf *skel) {
     LIBBPF_OPTS(bpf_test_run_opts, test_run_opts);
 
-    int get_current_namespace_level = GetProgramFd("get_current_namespace_level");
+    int get_current_namespace_level = bpf_program__fd(skel->progs.get_current_namespace_level);
 
     if (get_current_namespace_level < 0) {
         g_bxl->LogError(getpid(), "Failed to get fd for get_current_namespace_level program: %s", strerror(errno));
@@ -313,7 +268,6 @@ int GetCurrentProcessNamespaceLevel() {
     }
 
     int err = bpf_prog_test_run_opts(get_current_namespace_level, &test_run_opts);
-    close(get_current_namespace_level);
 
     if (err) {
         g_bxl->LogError(getpid(), "Failed to run get_current_namespace_level program: %s", strerror(errno));
@@ -338,8 +292,15 @@ bool ShouldForceEBPFLoading()
 /**
  * Whether EBPF loading already happened (by running an instance of this runner)
  */
-bool IsEbpfAlreadyLoaded()
+bool IsEbpfAlreadyLoaded(struct sandbox_bpf *skel)
 {
+    int namespace_fd = bpf_obj_get(bpf_map__get_pin_path(skel->maps.runner_pid_ns_inode));
+    if (namespace_fd < 0) return false;
+    struct bpf_map_info namespace_info = {};
+    __u32 namespace_info_size = sizeof(namespace_info);
+    int namespace_error = bpf_map_get_info_by_fd(namespace_fd, &namespace_info, &namespace_info_size);
+    close(namespace_fd);
+    if (namespace_error != 0) return false;
     __u32 id = 0;
     int err, fd = 0;
     char prog_name[MAX_PROG_FULL_NAME];
@@ -363,13 +324,15 @@ bool IsEbpfAlreadyLoaded()
         err = bpf_obj_get_info_by_fd(fd, &info, &len);
         if (err || !info.name)
         {
+            close(fd);
             continue;
         }
         // Check whether we find a program that is our loading witness
         // (this is just an arbitrarily picked program among all the ones we load)
         GetProgramFullName(&info, fd, prog_name, sizeof(prog_name));
 
-        if (strcmp(prog_name, EXPAND_AND_STRINGIFY(LOADING_WITNESS)) == 0) {
+        if (strcmp(prog_name, EXPAND_AND_STRINGIFY(LOADING_WITNESS)) == 0 &&
+            buildxl::linux::ebpf::ProgramReferencesMap(fd, namespace_info.id)) {
             close(fd);
             return true;
         }
@@ -841,8 +804,8 @@ int UnpinStaleMaps(struct sandbox_bpf *skel) {
 
 // Reuses the pinned maps, assuming bpf is already loaded.
 int ReuseMaps(struct sandbox_bpf *skel) {
-    // These are the `PINNED_MAPS_SIZE` pinned maps we have. Retrieve their pin paths and reuse them
-    bpf_map* pinned_maps[PINNED_MAPS_SIZE] = {
+    // Namespace identity is validated separately; these maps hold shared per-pip state.
+    bpf_map* pinned_maps[PINNED_PER_PIP_MAPS_SIZE] = {
         skel->maps.pid_map, 
         skel->maps.file_access_per_pip, 
         skel->maps.debug_buffer_per_pip,
@@ -856,7 +819,7 @@ int ReuseMaps(struct sandbox_bpf *skel) {
         skel->maps.untracked_scopes_per_pip
     };
 
-    for (int i = 0 ; i < PINNED_MAPS_SIZE; i++)
+    for (int i = 0 ; i < PINNED_PER_PIP_MAPS_SIZE; i++)
     {
         bpf_map* pinned_map = pinned_maps[i];
         int pin_fd = bpf_obj_get(bpf_map__get_pin_path(pinned_map));
@@ -1015,7 +978,7 @@ int SetupMaps(struct sandbox_bpf *skel) {
             return -1;
         }
 
-        int level = GetCurrentProcessNamespaceLevel();
+        int level = GetCurrentProcessNamespaceLevel(skel);
 
         if (level < 0) {
             LogError("Failed to get current process namespace level: %s\n", strerror(errno));
@@ -1033,6 +996,34 @@ int SetupMaps(struct sandbox_bpf *skel) {
         // Freeze the map so it can be safely accessed from the kernel side without locks.
         if (bpf_map_freeze(runner_pid_level_fd)) {
             LogError("Failed to freeze runner_pid_level map: %s\n", strerror(errno));
+            Cleanup(skel);
+            return -1;
+        }
+
+        int runner_pid_ns_inode_fd = bpf_object__find_map_fd_by_name(skel->obj, "runner_pid_ns_inode");
+        struct stat namespace_stat;
+        if (runner_pid_ns_inode_fd < 0 || stat("/proc/self/ns/pid", &namespace_stat) != 0) {
+            LogError("Failed to get runner PID namespace identity: %s\n", strerror(errno));
+            Cleanup(skel);
+            return -1;
+        }
+        __u64 namespace_inode = namespace_stat.st_ino;
+        __u64 stored_inode = 0;
+        if (bpf_map_lookup_elem(runner_pid_ns_inode_fd, &ZERO, &stored_inode)) {
+            LogError("Failed to read runner PID namespace identity: %s\n", strerror(errno));
+            Cleanup(skel);
+            return -1;
+        }
+        if (stored_inode != 0 && stored_inode != namespace_inode) {
+            LogError("Loaded EBPF maps belong to a different PID namespace. Use an isolated BPF pin mount.\n");
+            Cleanup(skel);
+            return -1;
+        }
+        // A previous load in this namespace may have left this immutable map pinned and frozen.
+        if (stored_inode == 0 &&
+            (bpf_map_update_elem(runner_pid_ns_inode_fd, &ZERO, &namespace_inode, BPF_ANY) ||
+             bpf_map_freeze(runner_pid_ns_inode_fd))) {
+            LogError("Failed to publish runner PID namespace identity: %s\n", strerror(errno));
             Cleanup(skel);
             return -1;
         }
@@ -1240,10 +1231,10 @@ int SetupMaps(struct sandbox_bpf *skel) {
     return 0;
 }
 
-// Defensively cleans up all the pinned maps that we have created.
+// Clear shared per-pip state, never the pinned immutable namespace identity.
 int CleanupPinnedMaps(struct sandbox_bpf *skel) {
     // We don't care about cleaning up the debug ring buffer map, ring buffers should get clean up automatically
-    bpf_map* pinned_maps[PINNED_MAPS_SIZE] = {
+    bpf_map* pinned_maps[PINNED_PER_PIP_MAPS_SIZE] = {
         skel->maps.pid_map, 
         skel->maps.file_access_per_pip, 
         skel->maps.debug_buffer_per_pip, 
@@ -1257,7 +1248,7 @@ int CleanupPinnedMaps(struct sandbox_bpf *skel) {
         skel->maps.untracked_scopes_per_pip
     };
 
-    for (int i = 0 ; i < PINNED_MAPS_SIZE; i++) {
+    for (int i = 0 ; i < PINNED_PER_PIP_MAPS_SIZE; i++) {
         bpf_map* pinned_map = pinned_maps[i];
 
         int res = buildxl::linux::ebpf::ClearBpfMap(bpf_map__fd(pinned_map), bpf_map__key_size(pinned_map));
@@ -1374,10 +1365,14 @@ void DeletePerPipMaps(sandbox_bpf *skel, pid_t runner_pid) {
     DeletePerPipMap(g_untracked_scopes_per_pip, runner_pid, "untracked scopes", /* errorOnNotFound */ false);
 }
 
-int Start(sandbox_bpf *skel, char **argv) {
+int Start(sandbox_bpf *skel, char **argv, buildxl::linux::ebpf::PidNamespacePinLock& pin_lock) {
     auto start = std::chrono::high_resolution_clock::now();
     
-    g_ebpf_already_loaded = IsEbpfAlreadyLoaded();
+    if (!pin_lock.Lock()) {
+        LogError("Failed to lock PID namespace pin directory: %s\n", strerror(errno));
+        return -1;
+    }
+    g_ebpf_already_loaded = IsEbpfAlreadyLoaded(skel);
     g_ebpf_should_force_ebpf_loading = ShouldForceEBPFLoading();
     
     int err = 0;
@@ -1456,6 +1451,7 @@ int Start(sandbox_bpf *skel, char **argv) {
         Cleanup(skel);
         return -1;
     }
+    pin_lock.Unlock();
 
     // Initialize the semaphore that signals that the root pid has been populated
     if(sem_init(&g_root_process_populated_semaphore, /* pshared */ 0, /* initial value */ 0) == -1) {
@@ -1712,8 +1708,22 @@ int main(int argc, char **argv) {
     /* Set up libbpf errors and debug info callback */
     libbpf_set_print(LibBpfPrintFn);
 
-    /* Open load and verify BPF application */
-    skel = sandbox_bpf::open();
+    struct stat namespace_stat;
+    if (stat("/proc/self/ns/pid", &namespace_stat) != 0) {
+        LogError("Failed to identify runner PID namespace: %s\n", strerror(errno));
+        return 1;
+    }
+    const std::string pin_parent = "/sys/fs/bpf";
+    std::string pin_root = buildxl::linux::ebpf::PidNamespacePinRoot(pin_parent, namespace_stat.st_ino);
+    int namespace_directory = buildxl::linux::ebpf::OpenPidNamespacePinDirectory(pin_parent, namespace_stat.st_ino);
+    if (namespace_directory < 0) {
+        LogError("Failed to create PID namespace pin directory '%s': %s\n", pin_root.c_str(), strerror(errno));
+        return 1;
+    }
+    buildxl::linux::ebpf::PidNamespacePinLock pin_lock(namespace_directory);
+    LIBBPF_OPTS(bpf_object_open_opts, open_options);
+    open_options.pin_root_path = pin_root.c_str();
+    skel = sandbox_bpf::open(&open_options);
     if (!skel) {
         LogError("Failed to open BPF skeleton\n");
         return 1;
@@ -1726,5 +1736,5 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    return Start(skel, argv);
+    return Start(skel, argv, pin_lock);
 }

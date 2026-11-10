@@ -138,7 +138,8 @@ namespace eBPFSandbox {
     });
     
     // Build BPF skeleton
-    const bpfObjectFile : DerivedFile = bpfCode.getOutputFile(bpfObjectPath);
+    @@public
+    export const bpfObjectFile : DerivedFile = bpfCode.getOutputFile(bpfObjectPath);
     const bpfskelPath : Path = p`${headerDeploymentDirectory.path}/sandbox.skel.h`;
     
     @@public

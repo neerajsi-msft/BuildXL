@@ -148,7 +148,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         [Fact]
         public void ReaderStreamsAndPreservesRawPayloadsAndInternedValues()
         {
-            using var reader = new StringReader($$"""
+            using var reader = new StringReader(DirectGraphFixtureFiles.NormalizeSourceLiteral($$"""
                 directgraph 3
                 path 0 out/a b
                 path 1 $literal
@@ -161,7 +161,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                 {{"\t"}}environment s0 s0
                 unknown invalid
 
-                """);
+                """));
             using var records = new DirectGraphTextReader(reader, "graph.dg").Read().GetEnumerator();
             Assert.True(records.MoveNext());
             Assert.Equal(new[] { "out/a b", "$literal" }, records.Current.Fields["input"][0]);
@@ -188,6 +188,30 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
             Assert.Equal(expected, first.Fields["option"][0][0]);
             Assert.Equal(expected, records.Current.PipDataFields["environment"][0].Expression.Value);
             Assert.False(records.MoveNext());
+        }
+
+        [Theory]
+        [InlineData("s12")]
+        [InlineData("p12")]
+        [InlineData("s00")]
+        public void ReferenceSpellingsCannotNameRecords(string name)
+        {
+            var error = Assert.Throws<InvalidDataException>(() =>
+                new DirectGraphTextReader(new StringReader($"directgraph 3\nprocess {name}\n"), "names.dg").Read().ToArray());
+            Assert.Contains("reserved", error.Message);
+            Assert.Contains(name, error.Message);
+            Assert.Contains("names.dg:", error.Message);
+        }
+
+        [Theory]
+        [InlineData("option s0")]
+        [InlineData("inputDirectory p0 s0")]
+        public void ReferenceSpellingsCannotNameOptionsOrProducers(string field)
+        {
+            var error = Assert.Throws<InvalidDataException>(() => new DirectGraphTextReader(
+                new StringReader($"directgraph 3\npath 0 /root\nstring 0 p12\nprocess run\n\t{field}\n"), "names.dg").Read().ToArray());
+            Assert.Contains("reserved", error.Message);
+            Assert.Contains("p12", error.Message);
         }
 
         [Fact]
@@ -1565,6 +1589,52 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         }
 
         [Fact]
+        public async Task CkatiV3GoldenCorpusPreservesPayloadsAndNativeArtifacts()
+        {
+            string directory = Path.Combine(AppContext.BaseDirectory, "fixtures", "KatiV3");
+            string text = await File.ReadAllTextAsync(Path.Combine(directory, "golden.dg"), new UTF8Encoding(false, true));
+            var expected = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, string>>(
+                await File.ReadAllTextAsync(Path.Combine(directory, "expected.json"), new UTF8Encoding(false, true)));
+            var records = new DirectGraphTextReader(new StringReader(text), "ckati-golden.dg").Read().ToArray();
+            var processes = records.Where(record => record.Kind == "process").ToArray();
+            Assert.Equal(2, processes.Length);
+            static string Raw(DirectGraphTextExpression expression) => expression.Kind == "concat"
+                ? string.Join(expression.Value, expression.Children.Select(Raw)) : expression.Value;
+            foreach (var process in processes)
+            {
+                var environment = process.PipDataFields["environment"].ToDictionary(field => field.Parameters[0], field => Raw(field.Expression));
+                foreach (var pair in expected) Assert.Equal(pair.Value, environment[pair.Key]);
+                var arguments = Assert.Single(process.PipDataFields["arguments"]).Expression;
+                Assert.True(arguments.EscapeArguments);
+                Assert.Equal(new[] { "--noprofile", "", " ", "-c" }, arguments.Children.Take(4).Select(Raw));
+            }
+            Assert.Contains(processes, process => Raw(Assert.Single(process.PipDataFields["arguments"]).Expression).Contains("$(__kati_shell_result=$("));
+            Assert.True(text.Split('\n').Max(line => line.Length) > 8192);
+
+            await Load(new[] { Project("golden", text) });
+            Assert.Equal(2, m_operations.Count(operation => operation.AddProcess != null));
+            Assert.Single(m_operations.Where(operation => operation.AddProcess?.OutputFiles.Count == 2));
+            foreach (var operation in m_operations.Where(operation => operation.AddProcess != null))
+            {
+                Assert.True(operation.AddProcess.EnableTempDirectory);
+                var semaphore = Assert.Single(operation.AddProcess.Semaphores);
+                Assert.Equal("corpus-slots", semaphore.Name.ToString(m_paths.StringTable));
+                Assert.Equal(4, semaphore.Limit);
+                Assert.Equal(1, semaphore.IncrementBy);
+                Assert.True(operation.AddProcess.Options.HasFlag(global::BuildXL.Pips.Operations.Process.Options.OutputsMustRemainWritable));
+                var environment = operation.AddProcess.EnvironmentVariables.ToDictionary(
+                    variable => variable.Name.ToString(m_paths.StringTable), variable => variable.Data.IsValid
+                        ? variable.Data.ToString(m_paths) : variable.Value.ToString(m_paths.StringTable));
+                foreach (var pair in expected) Assert.Equal(pair.Value, environment[pair.Key]);
+            }
+            var seal = Assert.Single(m_operations.Where(operation => operation.AddSealDirectory != null)).AddSealDirectory;
+            Assert.Equal(global::BuildXL.Pips.Operations.SealDirectoryKind.Partial, seal.Kind);
+            Assert.Equal(2, seal.Contents.Count);
+            var manifest = Assert.Single(m_operations.Where(operation => operation.AddWriteFile != null)).AddWriteFile;
+            Assert.Equal("[\"alpha\",\"beta\"]\n", manifest.Content.ToString(m_paths));
+        }
+
+        [Fact]
         public async Task TabFramedPipDataPreservesRawLiteralsAndDeferredPaths()
         {
             string payload = "first\r\n\tsecond\n";
@@ -1715,7 +1785,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         private DirectGraphProjectSettings Project(string name, string text, params string[] dependencies)
         {
             var file = Absolute(name + ".dg");
-            m_text.Add(file, text);
+            m_text.Add(file, DirectGraphFixtureFiles.NormalizeSourceLiteral(text));
             return new DirectGraphProjectSettings
             {
                 Name = PathAtom.Create(m_paths.StringTable, name),
@@ -1728,7 +1798,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
         private void AddPolicy(DirectGraphProjectSettings project, string text)
         {
             var file = Absolute(project.Name.ToString(m_paths.StringTable) + ".policy.dg");
-            m_text.Add(file, text);
+            m_text.Add(file, DirectGraphFixtureFiles.NormalizeSourceLiteral(text));
             project.PolicyFiles = new[] { file };
         }
 

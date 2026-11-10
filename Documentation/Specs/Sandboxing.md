@@ -43,6 +43,67 @@ Each pip is wrapped in a bpf runner program. This program is responsible for set
 
 eBPF programs are only loaded once in the lifetime of a build using an eBPF daemon, which gets launched as soon as the build starts and unloads the bpf programs when the build ends. Each bpf runner just verifies all required programs are already loaded and reuse the bpf maps that are setup by the daemon. The following diagram depicts the general flow:
 
+#### PID namespace pin layout and lifetime
+
+The libbpf pin parent is `/sys/fs/bpf`. BuildXL pins its maps beneath
+`/sys/fs/bpf/buildxl/<pid-namespace-inode>/`, where the inode comes from
+`stat("/proc/self/ns/pid")`. All pins created by the runner, including the
+immutable runner-namespace identity map, use this directory. The kernel-side
+namespace-inode filter remains enabled.
+
+Different PID namespaces get separate map/program sets. Program discovery
+matches both the loading-witness name and the namespace identity map ID; it
+does not reuse another namespace's program merely because its name matches.
+Runners in the same namespace reuse its maps and attached programs, including
+across BuildXL instances. Directory creation tolerates concurrent creators,
+refuses symlink substitutions, and an exclusive directory lock serializes
+discovery/loading and initial map setup. The lock is released before running
+the pip, so pip execution is not serialized.
+
+Only **maps** are pinned. Programs and `bpf_link`s are not pinned: the loading
+runner's skeleton owns the attachment FDs, and destroying that skeleton detaches
+its programs. A reuse runner does not take ownership of those links. As before,
+the loading daemon must remain alive while runners depend on its attachments;
+namespace isolation does not introduce reference-counted daemon ownership.
+Per-pip inner maps are removed from the shared outer maps after their process
+trees finish. Pinned outer maps and the namespace directory survive runner exit
+and may be reused when programs are loaded again.
+
+There is **no heartbeat, lease, automatic stale-directory cleanup, or max-age
+setting**. Map pins persist until explicitly removed, bpffs is unmounted, or the
+host reboots. `wsl --shutdown` also clears the WSL VM's bpffs. Stale namespace
+directories alone do not keep programs attached because links are not pinned.
+
+After **all builds/runners using a namespace have stopped**, an administrator
+can inspect and remove that namespace's pins:
+
+```sh
+# Replace INODE with the exact stale namespace inode; never run against an active build.
+sudo ls -l /sys/fs/bpf/buildxl/INODE
+sudo rm -f -- /sys/fs/bpf/buildxl/INODE/*
+sudo rmdir -- /sys/fs/bpf/buildxl/INODE
+```
+
+Removing map pins does not forcibly detach programs held by live link FDs.
+Do not delete the directory while any runner uses it: doing so can split a
+namespace into incompatible live map sets.
+
+Legacy binaries pin maps directly under `/sys/fs/bpf`. New runners neither
+reuse nor remove those flat pins or globally discovered legacy programs.
+After legacy builds have stopped, manually remove only the known BuildXL pins
+(`pid_map`, `sandbox_options_per_pip`, `stats_per_pip`, `file_access_per_pip`,
+`debug_buffer_per_pip`, `breakaway_processes_per_pip`, `event_cache_per_pip`,
+`string_cache_per_pip`, `neg_dentry_cache_per_pip`, `last_path_per_pip`,
+`untracked_scopes_per_pip`, and, for versions that pin it, `runner_pid_ns_inode`),
+or reboot / use `wsl --shutdown`. Never blanket-delete other applications'
+entries in `/sys/fs/bpf`.
+
+The native namespace tests include privilege-free path/separation/locking tests.
+Privileged separation and nested-namespace tests mount a private bpffs in a
+private mount namespace beneath their test working directory; they never use
+the host's pin root. They are gated by the existing eBPF-for-tests setting and
+print a capability skip when unavailable.
+
 <div style="text-align: center;">
 
 ![eBPF architecture](../Wiki/ebpf-architecture.png)

@@ -58,7 +58,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                         mounts: [{ name: a`out`, path: p`out`, isWritable: true, isReadable: true, trackSourceFileChanges: true }],
                     });
                     """)
-                .AddFile("graph.dg", $$"""
+                .AddDirectGraphFile("graph.dg", $$"""
                     directgraph 3
                     path 0 {{(OperatingSystemHelper.IsWindowsOS ? CmdHelper.CmdX64 : CmdHelper.Bash)}}
                     path 1 .
@@ -208,7 +208,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                         mounts: [{ name: a`out`, path: p`out`, isWritable: true, isReadable: true, trackSourceFileChanges: true }],
                     });
                     """)
-                .AddFile("base.dg", $$"""
+                .AddDirectGraphFile("base.dg", $$"""
                     directgraph 3
                     path 0 out/base.txt
                     path 1 out
@@ -224,9 +224,9 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}directory p1
 
                     """)
-                .AddFile("left.dg", producer("left", automaticTemp: true))
-                .AddFile("right.dg", producer("right", automaticTemp: false))
-                .AddFile("independent.dg", $$"""
+                .AddDirectGraphFile("left.dg", producer("left", automaticTemp: true))
+                .AddDirectGraphFile("right.dg", producer("right", automaticTemp: false))
+                .AddDirectGraphFile("independent.dg", $$"""
                     directgraph 3
                     path 0 /bin/bash
                     path 1 .
@@ -245,7 +245,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}output p2
 
                     """)
-                .AddFile("join.dg", $$"""
+                .AddDirectGraphFile("join.dg", $$"""
                     directgraph 3
                     path 0 out/shared
                     path 1 out/shared/left.txt
@@ -280,7 +280,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}directory p0 combined
 
                     """)
-                .AddFile("top.dg", $$"""
+                .AddDirectGraphFile("top.dg", $$"""
                     directgraph 3
                     path 0 /bin/bash
                     path 1 .
@@ -389,7 +389,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                         mounts: [{ name: a`out`, path: p`out`, trackSourceFileChanges: true, isReadable: true, isWritable: true }],
                     });
                     """)
-                .AddFile("tools.dg", $$"""
+                .AddDirectGraphFile("tools.dg", $$"""
                     directgraph 3
                     path 0 {{Path.GetDirectoryName(rewrite[0])}}
                     sealDirectory host
@@ -397,7 +397,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}sealKind sourceTopDirectoryOnly
 
                     """)
-                .AddFile("a.dg", $$"""
+                .AddDirectGraphFile("a.dg", $$"""
                     directgraph 3
                     path 0 out/a/a.txt
                     path 1 {{rewrite[0]}}
@@ -416,7 +416,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}rewrite p0
 
                     """)
-                .AddFile("a.policy.dg", $$"""
+                .AddDirectGraphFile("a.policy.dg", $$"""
                     directgraph 3
                     path 0 out/a
                     path 1 out/a/a.txt
@@ -426,7 +426,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}content p1
 
                     """)
-                .AddFile("b.dg", $$"""
+                .AddDirectGraphFile("b.dg", $$"""
                     directgraph 3
                     path 0 out/a/a.txt
                     path 1 out/b.txt
@@ -787,7 +787,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                         mounts: [{ name: a`out`, path: p`out`, trackSourceFileChanges: true, isReadable: true, isWritable: true }],
                     });
                     """)
-                .AddFile("tools.dg", $$"""
+                .AddDirectGraphFile("tools.dg", $$"""
                     directgraph 3
                     path 0 {{Path.GetDirectoryName(executable)}}
                     sealDirectory host
@@ -795,7 +795,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}sealKind sourceTopDirectoryOnly
 
                     """)
-                .AddFile("producer.dg", $$"""
+                .AddDirectGraphFile("producer.dg", $$"""
                     directgraph 3
                     path 0 {{executable}}
                     path 1 .
@@ -813,7 +813,7 @@ namespace Test.BuildXL.FrontEnd.DirectGraph
                     {{"\t"}}directory p2 {{(directoryKind == "composite" ? "combined" : "first")}}
 
                     """)
-                .AddFile("consumer.dg", $$"""
+                .AddDirectGraphFile("consumer.dg", $$"""
                     directgraph 3
                     path 0 {{executable}}
                     path 1 .

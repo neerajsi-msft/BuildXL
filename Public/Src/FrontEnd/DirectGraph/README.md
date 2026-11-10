@@ -138,6 +138,11 @@ escapes it as one argument, then joins the escaped values. The markers only
 select layout; both forms have identical semantics. Inline lists accept only
 references, not nested expressions, and cannot continue on another line.
 Raw text appears only in registrations, not inline literal expressions.
+Names matching `[sp][0-9]+` (including leading-zero spellings) are reserved and
+cannot name operations, producers or options. Choose another spelling such as
+`step12`. Scalar metadata, including producer selectors, may use `sID` references;
+the reserved-name rule prevents those references from silently changing the
+meaning of a legitimate operation name.
 
 For example, the indentation below consists of literal TABs. `<SPACE>` denotes
 one literal ASCII space, not a token to emit:
@@ -156,7 +161,8 @@ process compile
 
 This illustrates field syntax, not a complete runnable process; the environment
 name/value references stand for additional string registrations.
-A process has at most one complete `arguments` expression, rooted at `concat`.
+A process has at most one complete `arguments` expression: a bare `sID`/`pID`
+reference or a `concat`.
 Each direct child of an escaping concat is one argument, even when it contains
 deeper concatenations. Child rendering rules are respected before escaping the
 complete child; separators are not escaped. Empty children remain empty
@@ -189,7 +195,10 @@ inline spans, not independently shared tree references. Version 3 consumers and
 postprocessors must support raw registrations, block dependency sets and expressions.
 In particular, an explicit source cannot lie under **any project's shared or
 exclusive opaque root**, in either construction order. BoB's broad uniform
-private writable roots must therefore not contain source files.
+private writable roots must therefore not contain explicit source-file inputs.
+Source seals beneath another project's shared opaque root are allowed when
+native validation accepts them, matching DScript; the loader does not impose
+an additional source-seal overlap restriction.
 An ancestor witness index bounds source/output checks without scanning every
 source. Unlisted opaque file inputs likewise retain their selected producer
 grant so a later sibling's private explicit output cannot bypass the existing

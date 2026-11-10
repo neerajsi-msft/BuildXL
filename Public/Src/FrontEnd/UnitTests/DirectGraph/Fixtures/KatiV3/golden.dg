@@ -1,0 +1,111 @@
+directgraph 3
+path 0 /directgraph-conformance/install
+path 1 /directgraph-conformance/membership.json
+path 2 /bin/bash
+path 3 /directgraph-conformance
+path 4 /directgraph-conformance/input
+path 5 /directgraph-conformance/install/alpha
+path 6 /directgraph-conformance/install/beta
+path 7 /directgraph-conformance/output/long
+string 0 corpus-slots
+string 1 ["alpha","beta"]
+	
+string 2  
+string 3 --noprofile
+string 4 
+string 5 -c
+string 6 '
+string 7 /bin/bash
+string 8 ' 
+string 9 -c 
+string 10 printf 
+string 11 \
+string 12 %s
+string 13 "
+string 14 $(__kati_shell_result=$(printf 
+string 15 left\nright\n
+string 16 ) 
+string 17 || 
+string 18 :; 
+string 19 $__kati_shell_result
+string 20 " 
+string 21 | 
+string 22 tr 
+string 23 \n
+string 24 )
+string 25 > 
+string 26 install/alpha
+string 27 &&
+	
+string 28 literal 
+string 29 $ 
+string 30 dollar
+string 31 install/beta
+string 32 DG_C1
+string 33 
+string 34 DG_CR_LF
+string 35 leftright
+		continuation
+	
+string 36 DG_DOLLAR
+string 37 $HOME $$ $(not-expanded) ' " \
+string 38 DG_EMPTY
+string 39 DG_SPACE
+string 40 DG_TABS
+string 41 	leading	and trailing	
+string 42 chunk 
+string 43 end
+string 44 output/long
+set 0
+	p4
+process action_0000000000000000
+	executable p2
+	workingDirectory p3
+	arguments concat s2 escapeArguments :
+		s3
+		s4
+		s2
+		s5
+		concat - s6 s7 s8 s6 s3 s8 s6 s8 s8 s8 s9 s6 s10 s6 s11 s6 s6 s12 s6 s11 s6 s8 s13 s14 s6 s11 s6 s6 s15 s6 s11 s6 s6 s16 s17 s18 s10 s6 s11 s6 s6 s12 s6 s11 s6 s8 s13 s19 s20 s21 s22 s6 s11 s6 s6 s23 s6 s11 s6 s8 s6 s11 s6 s8 s6 s11 s6 s6 s24 s20 s25 s26 s8 s27 s6 s7 s8 s6 s3 s8 s6 s8 s8 s8 s9 s6 s10 s6 s11 s6 s6 s12 s6 s11 s6 s8 s6 s11 s6 s6 s28 s29 s30 s6 s11 s6 s8 s25 s31 s6
+	environment s32 s33
+	environment s34 s35
+	environment s36 s37
+	environment s38 s4
+	environment s39 s2
+	environment s40 s41
+	option dependsOnCurrentOs
+	option keepOutputsWritable
+	semaphore s0 4 1
+	enableTempDirectory true
+	input @0
+	output p5
+	output p6
+process action_0000000000000001
+	executable p2
+	workingDirectory p3
+	arguments concat s2 escapeArguments :
+		s3
+		s4
+		s2
+		s5
+		concat - s6 s7 s8 s6 s3 s8 s6 s8 s8 s8 s9 s6 s10 s6 s11 s6 s6 s12 s6 s11 s6 s8 s6 s11 s6 s6 s6 s11 s6 s8 s6 s11 s6 s8 s6 s11 s6 s8 s6 s11 s6 s6 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s42 s43 s6 s11 s6 s8 s25 s44 s6
+	environment s32 s33
+	environment s34 s35
+	environment s36 s37
+	environment s38 s4
+	environment s39 s2
+	environment s40 s41
+	option dependsOnCurrentOs
+	option keepOutputsWritable
+	semaphore s0 4 1
+	enableTempDirectory true
+	input @0
+	output p7
+writeFile installation_manifest
+	destination p1
+	content s1
+sealDirectory installation
+	directoryRoot p0
+	sealKind partial
+	content p5
+	content p6
